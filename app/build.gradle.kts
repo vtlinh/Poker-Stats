@@ -41,21 +41,19 @@ val verBuild: Int = System.getenv("BUILD_VERSION")?.toIntOrNull() ?: (commitsThi
 // compares the release tag against the installed version — always agrees with
 // what the app reports about itself. Otherwise fall back to the date-based
 // computation above.
-val releaseOverride: String? = System.getenv("RELEASE_VERSION_NAME")?.trim()?.removePrefix("v")
-val computedVersionName: String
-val computedVersionCode: Int
-if (!releaseOverride.isNullOrEmpty()) {
-    computedVersionName = releaseOverride
-    val parts = releaseOverride.split(".")
+val releaseOverride: String? =
+    System.getenv("RELEASE_VERSION_NAME")?.trim()?.removePrefix("v")?.takeIf { it.isNotEmpty() }
+
+val computedVersionName: String = releaseOverride ?: "$verMajor.$verMinor.$verBuild"
+
+// Monotonic across weeks/years as long as build < 1000 and week <= 53.
+val computedVersionCode: Int = releaseOverride?.let { version ->
+    val parts = version.split(".")
     val maj = parts.getOrNull(0)?.toIntOrNull() ?: 0
     val min = parts.getOrNull(1)?.toIntOrNull() ?: 0
     val bld = parts.getOrNull(2)?.toIntOrNull() ?: 0
-    computedVersionCode = (maj * 100 + min) * 1000 + bld
-} else {
-    computedVersionName = "$verMajor.$verMinor.$verBuild"
-    // Monotonic across weeks/years as long as build < 1000 and week <= 53.
-    computedVersionCode = (verMajor * 100 + verMinor) * 1000 + verBuild
-}
+    (maj * 100 + min) * 1000 + bld
+} ?: ((verMajor * 100 + verMinor) * 1000 + verBuild)
 
 val keystoreProperties = Properties().apply {
     val f = rootProject.file("keystore.properties")
