@@ -26,3 +26,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Equity generator build artifacts (tools/)
+tools/equity
+tools/equity.tsv
+__pycache__/
+.pytest_cache/

@@ -42,11 +42,11 @@ install.
   hand-category distribution for all **169** starting-hand classes × **2–6**
   players (845 rows). The app maps your two cards to a class (`AA`, `AKs`,
   `72o`, …) and reads one indexed row.
-- **The numbers come from a real engine.** `tools/GenerateEquityDb.kt` reuses
-  the app's `HandEvaluator` + `EquityCalculator` to Monte-Carlo 300k deals per
-  cell offline; the result is packed into the shipped DB. The evaluator is
-  cross-checked against a brute-force reference over 50k random hands in the
-  unit tests.
+- **The numbers come from a fast offline generator.** `tools/equity.c` is an
+  OpenMP-parallel Monte-Carlo simulator (1,000,000 deals per cell) whose 7-card
+  evaluator is cross-checked against a brute-force reference over 300k random
+  hands (`./equity --selftest`). A small Python harness packs its output into
+  the shipped SQLite DB. The app itself contains no poker-evaluation code.
 
 Sample win chances the table reproduces (heads-up, preflop; ties count as wins):
 
@@ -73,20 +73,26 @@ so the in-app updater compares correctly.
 Requirements: JDK 17 and the Android SDK (or Android Studio).
 
 ```bash
-./gradlew test                 # run the engine unit tests
 ./gradlew :app:assembleDebug   # build a debug APK
 ```
 
-Regenerating the equity DB is only needed if you change the engine — see
-[`tools/README.md`](tools/README.md).
+The equity database is precomputed and checked in. Regenerating it (only needed
+if you change the simulator) uses C + Python — see
+[`tools/README.md`](tools/README.md):
+
+```bash
+cd tools && make test          # C self-test + Python tests
+cd tools && make db            # regenerate the DB (1,000,000 deals/cell)
+```
 
 ## Continuous integration
 
-| Workflow      | Trigger        | Does                                                  |
-|---------------|----------------|-------------------------------------------------------|
-| `ci.yml`      | push / PR      | unit tests, lint, debug APK                            |
-| `release.yml` | `v*` git tag   | builds a **signed** release APK, publishes a Release   |
-| `pages.yml`   | push to `main` | deploys the `docs/` download page to GitHub Pages      |
+| Workflow            | Trigger          | Does                                                 |
+|---------------------|------------------|------------------------------------------------------|
+| `ci.yml`            | push / PR        | lint, debug APK                                      |
+| `equity-tools.yml`  | push / PR (tools)| builds the C generator and runs its tests            |
+| `release.yml`       | `v*` git tag     | builds a **signed** release APK, publishes a Release  |
+| `pages.yml`         | push to `main`   | deploys the `docs/` download page to GitHub Pages     |
 
 ## Project layout
 

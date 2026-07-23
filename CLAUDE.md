@@ -21,8 +21,9 @@ precomputed equities — it does **no** poker math at runtime.
 
 ```
 app/src/main/java/com/pokerstats/odds/
-├── engine/                 # Pure-Kotlin poker math (unit-tested; used offline to build the DB)
-│   ├── Card.kt · HandEvaluator.kt · EquityCalculator.kt
+├── engine/                 # Card model only — NO poker math
+│   ├── Card.kt             # Rank, Suit, Card (0..51 index), full deck
+│   └── HandCategory.kt     # the 9 categories (names match the DB's JSON keys)
 ├── data/
 │   └── EquityDatabase.kt   # Copies the asset DB out, answers lookups (hand class, players)
 ├── update/
@@ -32,30 +33,35 @@ app/src/main/java/com/pokerstats/odds/
 │   └── ...
 └── MainActivity.kt
 app/src/main/assets/poker_equity.db   # Precomputed equities (169 hands × players 2–6 = 845 rows)
-tools/                                 # Regenerates poker_equity.db (see tools/README.md)
+tools/                                 # C + Python generator for poker_equity.db (see tools/README.md)
 ```
 
 ## Precomputed equities (the DB)
 
 - The app is a pure lookup: `EquityDatabase.lookup(cardA, cardB, players)` maps
   the two cards to a canonical class (`AA`, `AKs`, `AKo`, `72o`, …) and reads
-  one indexed row. No simulation on device.
-- The DB is generated **offline** by `tools/GenerateEquityDb.kt`, which reuses
-  `engine/` to Monte-Carlo 300k deals per cell, then `tools/build_equity_db.py`
-  packs the TSV into SQLite. Regenerate only when the engine changes; see
-  `tools/README.md`. Sanity: `AA` heads-up ≈ 85%, `AA` 6-handed ≈ 49%.
+  one indexed row. **No poker math on device — there is no Kotlin evaluator.**
+- The DB stores `win`, `tie`, `lose` and a hand-category distribution per cell.
+  The UI shows win probability with **ties counted as wins** (`win + tie`).
 - `EquityDatabase` copies the asset to the app's databases dir on first use and
   recopies if the asset's `PRAGMA user_version` changes.
 
-## The engine (still the source of truth for the numbers)
+## The equity generator (C + Python, in `tools/`)
 
-- `HandEvaluator` collapses any 5–7 card hand into one comparable `Int`
-  (category in the top bits, kicker nibbles below); evaluates from rank/suit
-  counts, not 21-subset enumeration; handles the wheel. Pinned by
-  `directEvaluatorMatchesBruteForce` (50k random hands vs brute force).
-- `EquityCalculator` Monte-Carlos win/tie/lose with an injectable `Random`.
-- **Keep the engine tests green** — they encode canonical equities and feed the
-  DB generator.
+The numbers are computed **offline**, never in the app:
+
+- `tools/equity.c` — an OpenMP-parallel Monte-Carlo simulator. Its 7-card
+  evaluator scores a hand directly from rank/suit counts into one comparable
+  int (category in the top bits, kicker nibbles below); handles the wheel.
+  `./equity --selftest` cross-checks it against a brute-force best-of-21
+  reference over 300k random hands. Default 1,000,000 deals/cell.
+- `tools/build_equity_db.py` packs the generator's TSV into the SQLite asset;
+  `generate_db.py` / `make db` runs the whole pipeline.
+- `tools/test_equity.py` (`make test`) pins canonical equities (`AA` heads-up
+  ≈ 85%, `AA` 6-handed ≈ 49%, `72o` worst) and runs the C self-test.
+- **If you change the evaluator, keep `make test` green and regenerate the DB.**
+  The `HandCategory` enum names in the app must stay in sync with the category
+  keys emitted by `equity.c`.
 
 ## Versioning: `major.minor.build`
 
@@ -90,10 +96,11 @@ Requires `INTERNET` + `REQUEST_INSTALL_PACKAGES` and a `FileProvider`
 ## Common commands
 
 ```bash
-./gradlew test                 # engine unit tests (JVM)
 ./gradlew :app:assembleDebug   # debug APK
 ./gradlew :app:assembleRelease # signed release APK (needs signing config)
 ./gradlew lint
+cd tools && make test          # equity generator: C self-test + pytest
+cd tools && make db            # regenerate the SQLite asset (1M deals/cell)
 ```
 
 ## Signing & release
@@ -106,13 +113,15 @@ Release signing is driven by secrets (env vars, then optional local
 
 ## CI / CD (GitHub Actions)
 
-- **`ci.yml`** — push/PR: unit tests, lint, debug APK (`fetch-depth: 0`).
+- **`ci.yml`** — push/PR: lint, debug APK (`fetch-depth: 0`).
+- **`equity-tools.yml`** — push/PR touching `tools/**`: builds the C generator and runs its tests.
 - **`release.yml`** — `v*` tag: signed release APK → GitHub Release as `poker-odds.apk`.
 - **`pages.yml`** — deploys `docs/` (download page) to GitHub Pages.
 
 ## Conventions
 
-- `engine/` stays free of Android imports (JVM-testable, drives the generator).
+- `engine/` holds only the card model + category enum — no Android imports, no
+  poker math. All hand evaluation lives in `tools/equity.c`.
 - UI state flows one way: Compose reads `PokerViewModel.uiState`; actions emit a
   new immutable `PokerUiState`.
-- The app must not compute equities at runtime — extend the DB instead.
+- The app must not compute equities at runtime — regenerate the DB instead.
