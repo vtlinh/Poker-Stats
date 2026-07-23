@@ -1,83 +1,92 @@
 # Poker Odds ♠️
 
 A native Android app that tells you your **chance of winning** a Texas Hold'em
-hand. Pick your two hole cards, add any community cards on the board, choose how
-many opponents you're up against, and it runs a Monte-Carlo simulation to
-estimate your win / tie / lose probabilities — plus a breakdown of how often
+hand before the flop. Pick your two hole cards and how many players are at the
+table (2–6), and it instantly shows your win / tie / equity — plus how often
 your hand improves to each poker category.
 
+It's fast because it does **no** math on the phone: every answer is a single
+lookup in a precomputed database that ships with the app.
+
 <p align="center">
-  <em>Kotlin · Jetpack Compose · Material 3</em>
+  <em>Kotlin · Jetpack Compose · Material 3 · offline SQLite lookup</em>
 </p>
 
 ## Download
 
-Grab the latest signed APK from the **[releases page][releases]**, or from the
-project **[download page][pages]**.
+Grab the latest signed APK from the **[releases page][releases]** or the
+project **[download page][pages]**. Once installed, the app **updates itself**:
+when a newer release exists, a banner appears at the top — tap it to download and
+install.
 
 [releases]: https://github.com/vtlinh/Poker-Stats/releases/latest
 [pages]: https://vtlinh.github.io/Poker-Stats/
 
-> The app is distributed as an APK. On your device, enable **Install unknown
-> apps** for your browser/file manager, then open the downloaded APK.
+> The app is distributed as an APK. Enable **Install unknown apps** for your
+> browser/file manager (the app will prompt you) to install and self-update.
 
 ## Features
 
-- 🃏 Tap-to-pick card selector for your hand and the board (flop / turn / river).
-- 👥 1–9 opponents.
+- 🃏 Tap-to-pick selector for your two hole cards.
+- 👥 2–6 total players (you + up to 5 opponents).
+- ⚡ Instant results — a pure database lookup, no on-device computation.
 - 📊 Win, tie, and equity (split-pot-aware) percentages.
-- 📈 Probability that your hand ends up as each category (pair … straight flush).
-- ⚡ Fast, allocation-light Monte-Carlo engine (100k deals per query by default).
+- 📈 Probability your hand ends up as each category (pair … straight flush).
+- ⬆️ Built-in updater: checks GitHub Releases, downloads each version once,
+  installs it, and cleans up the file afterwards.
 - 🌗 Light & dark themes.
 
 ## How it works
 
-The core is a small, framework-free Kotlin engine:
+- **Precomputed table.** A tiny SQLite asset holds win/tie/lose + the final
+  hand-category distribution for all **169** starting-hand classes × **2–6**
+  players (845 rows). The app maps your two cards to a class (`AA`, `AKs`,
+  `72o`, …) and reads one indexed row.
+- **The numbers come from a real engine.** `tools/GenerateEquityDb.kt` reuses
+  the app's `HandEvaluator` + `EquityCalculator` to Monte-Carlo 300k deals per
+  cell offline; the result is packed into the shipped DB. The evaluator is
+  cross-checked against a brute-force reference over 50k random hands in the
+  unit tests.
 
-- **`HandEvaluator`** reduces any 5–7 card hand to a single comparable `Int`
-  score, so ranking hands is one integer comparison. It evaluates directly from
-  rank/suit counts instead of enumerating all 21 five-card subsets, which keeps
-  the simulation fast. Correctness is pinned by a unit test that cross-checks it
-  against a brute-force reference over 50,000 random hands.
-- **`EquityCalculator`** deals the unknown cards thousands of times with a
-  partial Fisher–Yates shuffle, evaluates every player's best hand, and tallies
-  how often the hero wins, ties, or loses.
+Sample equities the table reproduces (heads-up, preflop):
 
-Sample equities the engine reproduces (heads-up, pre-flop):
+| Hand   | Win % vs 1 opponent |
+|--------|---------------------|
+| A♠ A♥  | ~85%                |
+| A♠ K♠  | ~67%                |
+| 7♦ 2♣  | ~32% (classic worst)|
 
-| Hand   | Win % (vs 1 random hand) |
-|--------|--------------------------|
-| A♠ A♥  | ~85%                     |
-| A♠ K♠  | ~67%                     |
-| 7♦ 2♣  | ~35% (the classic worst) |
+## Versioning
+
+Builds are versioned `major.minor.build`:
+
+- `major` = current year − 2025
+- `minor` = ISO week of the year
+- `build` = commits this week + 1 (resets each week)
+
+So the first build of the 30th week of 2026 is `1.30.1`. `versionCode` is
+derived monotonically. Tag releases with the computed version (e.g. `v1.30.2`)
+so the in-app updater compares correctly.
 
 ## Build from source
 
-Requirements: JDK 17 and the Android SDK (or just open in Android Studio).
+Requirements: JDK 17 and the Android SDK (or Android Studio).
 
 ```bash
 ./gradlew test                 # run the engine unit tests
-./gradlew :app:assembleDebug   # build a debug APK -> app/build/outputs/apk/debug/
+./gradlew :app:assembleDebug   # build a debug APK
 ```
 
-## Signing your own release
-
-Provide a keystore via environment variables (or a local `keystore.properties`)
-— see [`CLAUDE.md`](CLAUDE.md#signing--release) for the full table — then:
-
-```bash
-./gradlew :app:assembleRelease
-```
+Regenerating the equity DB is only needed if you change the engine — see
+[`tools/README.md`](tools/README.md).
 
 ## Continuous integration
 
-| Workflow      | Trigger        | Does                                                |
-|---------------|----------------|-----------------------------------------------------|
-| `ci.yml`      | push / PR      | unit tests, lint, debug APK                          |
-| `release.yml` | `v*` git tag   | builds a **signed** release APK, publishes a Release |
-| `pages.yml`   | push to `main` | deploys the `docs/` download page to GitHub Pages    |
-
-To cut a release: `git tag v1.0.0 && git push origin v1.0.0`.
+| Workflow      | Trigger        | Does                                                  |
+|---------------|----------------|-------------------------------------------------------|
+| `ci.yml`      | push / PR      | unit tests, lint, debug APK                            |
+| `release.yml` | `v*` git tag   | builds a **signed** release APK, publishes a Release   |
+| `pages.yml`   | push to `main` | deploys the `docs/` download page to GitHub Pages      |
 
 ## Project layout
 

@@ -1,96 +1,133 @@
 package com.pokerstats.odds.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.pokerstats.odds.engine.Card
-import com.pokerstats.odds.engine.EquityCalculator
-import com.pokerstats.odds.engine.EquityResult
+import com.pokerstats.odds.data.EquityDatabase
+import com.pokerstats.odds.data.PreflopEquity
+import com.pokerstats.odds.update.UpdateInfo
+import com.pokerstats.odds.update.UpdateManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
-/** Which group of cards the picker is currently filling. */
-enum class CardSlot { HERO, BOARD }
+const val MIN_PLAYERS = 2
+const val MAX_PLAYERS = 6
+
+/** State of the in-app updater. */
+data class UpdateUiState(
+    val available: UpdateInfo? = null,
+    val downloading: Boolean = false,
+    val progress: Float = 0f,
+    val dismissed: Boolean = false,
+    val readyToInstall: File? = null,
+) {
+    val showBanner: Boolean get() = available != null && !dismissed
+}
 
 /** Immutable snapshot of the calculator screen. */
 data class PokerUiState(
-    val hole: List<Card> = emptyList(),
-    val board: List<Card> = emptyList(),
-    val opponents: Int = 1,
-    val isCalculating: Boolean = false,
-    val progress: Float = 0f,
-    val result: EquityResult? = null,
+    val hole: List<com.pokerstats.odds.engine.Card> = emptyList(),
+    val totalPlayers: Int = MIN_PLAYERS,
+    val result: PreflopEquity? = null,
+    val update: UpdateUiState = UpdateUiState(),
 ) {
-    val usedCards: Set<Card> get() = (hole + board).toSet()
-    val canCalculate: Boolean get() = hole.size == 2 && !isCalculating
+    val usedCards: Set<com.pokerstats.odds.engine.Card> get() = hole.toSet()
     val heroComplete: Boolean get() = hole.size == 2
 }
 
-class PokerViewModel(
-    private val calculator: EquityCalculator = EquityCalculator(),
-) : ViewModel() {
+class PokerViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val equityDb = EquityDatabase(app)
 
     private val _uiState = MutableStateFlow(PokerUiState())
     val uiState: StateFlow<PokerUiState> = _uiState.asStateFlow()
 
-    private var simulationJob: Job? = null
+    // --- calculator --------------------------------------------------------
 
-    /** Add [card] to the given [slot] if there is room, otherwise ignore. */
-    fun addCard(card: Card, slot: CardSlot) {
+    fun addCard(card: com.pokerstats.odds.engine.Card) {
         _uiState.update { state ->
-            if (state.usedCards.contains(card)) return@update state
-            when (slot) {
-                CardSlot.HERO -> if (state.hole.size < 2) {
-                    state.copy(hole = state.hole + card, result = null)
-                } else state
-                CardSlot.BOARD -> if (state.board.size < 5) {
-                    state.copy(board = state.board + card, result = null)
-                } else state
-            }
+            if (state.hole.size >= 2 || state.usedCards.contains(card)) state
+            else state.copy(hole = state.hole + card)
         }
+        refreshResult()
     }
 
-    fun removeCard(card: Card) {
-        _uiState.update { state ->
-            state.copy(
-                hole = state.hole - card,
-                board = state.board - card,
-                result = null,
-            )
-        }
+    fun removeCard(card: com.pokerstats.odds.engine.Card) {
+        _uiState.update { it.copy(hole = it.hole - card) }
+        refreshResult()
     }
 
-    fun setOpponents(count: Int) {
-        _uiState.update { it.copy(opponents = count.coerceIn(1, 9), result = null) }
+    fun setPlayers(count: Int) {
+        _uiState.update { it.copy(totalPlayers = count.coerceIn(MIN_PLAYERS, MAX_PLAYERS)) }
+        refreshResult()
     }
 
     fun reset() {
-        simulationJob?.cancel()
-        _uiState.value = PokerUiState()
+        _uiState.update { it.copy(hole = emptyList(), result = null) }
     }
 
-    fun calculate() {
+    private fun refreshResult() {
         val state = _uiState.value
-        if (!state.canCalculate) return
-        simulationJob?.cancel()
-        simulationJob = viewModelScope.launch {
-            _uiState.update { it.copy(isCalculating = true, progress = 0f, result = null) }
-            val result = withContext(Dispatchers.Default) {
-                calculator.simulate(
-                    hole = state.hole,
-                    board = state.board,
-                    opponents = state.opponents,
-                    onProgress = { p ->
-                        _uiState.update { it.copy(progress = p) }
-                    },
-                )
+        if (state.hole.size != 2) {
+            if (state.result != null) _uiState.update { it.copy(result = null) }
+            return
+        }
+        val a = state.hole[0]
+        val b = state.hole[1]
+        val players = state.totalPlayers
+        viewModelScope.launch {
+            val equity = withContext(Dispatchers.IO) { equityDb.lookup(a, b, players) }
+            // Ignore stale lookups if the hand changed while querying.
+            _uiState.update { cur ->
+                if (cur.hole == listOf(a, b) && cur.totalPlayers == players) cur.copy(result = equity)
+                else cur
             }
-            _uiState.update { it.copy(isCalculating = false, progress = 1f, result = result) }
+        }
+    }
+
+    // --- updater -----------------------------------------------------------
+
+    /** Clean up stale downloads and look for a newer release on launch. */
+    fun onStart() {
+        UpdateManager.cleanupOldDownloads(getApplication())
+        viewModelScope.launch {
+            val info = UpdateManager.checkForUpdate() ?: return@launch
+            _uiState.update { it.copy(update = it.update.copy(available = info)) }
+        }
+    }
+
+    fun dismissUpdate() {
+        _uiState.update { it.copy(update = it.update.copy(dismissed = true)) }
+    }
+
+    fun startUpdate(context: Context) {
+        val info = _uiState.value.update.available ?: return
+        if (_uiState.value.update.downloading) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(update = it.update.copy(downloading = true, progress = 0f)) }
+            val apk = try {
+                UpdateManager.downloadApk(getApplication(), info) { p ->
+                    _uiState.update { it.copy(update = it.update.copy(progress = p)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(update = it.update.copy(downloading = false)) }
+                return@launch
+            }
+            _uiState.update {
+                it.copy(update = it.update.copy(downloading = false, readyToInstall = apk))
+            }
+            if (UpdateManager.canInstall(context)) {
+                UpdateManager.installApk(context, apk)
+            } else {
+                UpdateManager.requestInstallPermission(context)
+            }
         }
     }
 }
