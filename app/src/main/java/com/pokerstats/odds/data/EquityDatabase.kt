@@ -16,11 +16,13 @@ data class PreflopEquity(
     val lose: Double,
     val categoryFrequency: Map<HandCategory, Double>,
 ) {
-    val equity: Double get() = win + tie
+    /** Win probability with ties counted as wins. */
+    val winCountingTies: Double get() = win + tie
+
     val winPercent: Double get() = win * 100.0
     val tiePercent: Double get() = tie * 100.0
     val losePercent: Double get() = lose * 100.0
-    val equityPercent: Double get() = equity * 100.0
+    val winCountingTiesPercent: Double get() = winCountingTies * 100.0
 }
 
 /**

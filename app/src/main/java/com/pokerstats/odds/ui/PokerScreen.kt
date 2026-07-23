@@ -57,7 +57,6 @@ import com.pokerstats.odds.ui.theme.CardWhite
 import com.pokerstats.odds.ui.theme.ChipRed
 import com.pokerstats.odds.ui.theme.InkBlack
 import com.pokerstats.odds.ui.theme.LoseRed
-import com.pokerstats.odds.ui.theme.TieAmber
 import com.pokerstats.odds.ui.theme.WinGreen
 
 @Composable
@@ -310,23 +309,24 @@ private fun ResultPanel(result: PreflopEquity) {
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                "%.1f%%".format(result.winPercent),
+                "%.1f%%".format(result.winCountingTiesPercent),
                 style = MaterialTheme.typography.displaySmall,
                 color = WinGreen,
             )
-            Text(
-                "Equity (incl. split pots): %.1f%%".format(result.equityPercent),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            )
+            if (result.tiePercent >= 0.05) {
+                Text(
+                    "Includes %.1f%% ties (counted as wins)".format(result.tiePercent),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
-            OutcomeBar(result.winPercent, result.tiePercent, result.losePercent)
+            OutcomeBar(result.winCountingTiesPercent, result.losePercent)
 
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Legend("Win", WinGreen, result.winPercent)
-                Legend("Tie", TieAmber, result.tiePercent)
+                Legend("Win", WinGreen, result.winCountingTiesPercent)
                 Legend("Lose", LoseRed, result.losePercent)
             }
 
@@ -350,7 +350,7 @@ private fun ResultPanel(result: PreflopEquity) {
 }
 
 @Composable
-private fun OutcomeBar(win: Double, tie: Double, lose: Double) {
+private fun OutcomeBar(win: Double, lose: Double) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -358,7 +358,6 @@ private fun OutcomeBar(win: Double, tie: Double, lose: Double) {
             .clip(RoundedCornerShape(11.dp)),
     ) {
         if (win > 0) Box(Modifier.weight(win.toFloat()).fillMaxSize().background(WinGreen))
-        if (tie > 0) Box(Modifier.weight(tie.toFloat()).fillMaxSize().background(TieAmber))
         if (lose > 0) Box(Modifier.weight(lose.toFloat()).fillMaxSize().background(LoseRed))
     }
 }

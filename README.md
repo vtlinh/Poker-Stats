@@ -48,13 +48,13 @@ install.
   cross-checked against a brute-force reference over 50k random hands in the
   unit tests.
 
-Sample equities the table reproduces (heads-up, preflop):
+Sample win chances the table reproduces (heads-up, preflop; ties count as wins):
 
 | Hand   | Win % vs 1 opponent |
 |--------|---------------------|
 | A♠ A♥  | ~85%                |
 | A♠ K♠  | ~67%                |
-| 7♦ 2♣  | ~32% (classic worst)|
+| 7♦ 2♣  | ~35% (classic worst)|
 
 ## Versioning
 
