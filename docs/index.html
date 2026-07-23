@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Poker Odds — Texas Hold'em win probability</title>
+<meta name="description" content="A native Android app that calculates your chance of winning a Texas Hold'em hand. Free download." />
+<style>
+  :root{
+    --felt:#0e4d25; --felt-2:#0b3d22; --green:#1b7a3d; --green-lite:#3dbb6b;
+    --gold:#f4c542; --ink:#0f1512; --paper:#f7f7f2; --muted:rgba(247,247,242,.72);
+    --card:#12331f; --line:rgba(247,247,242,.14);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--paper);
+    background:radial-gradient(1200px 700px at 70% -10%,#1b7a3d33,transparent 60%),
+               linear-gradient(160deg,var(--felt),var(--felt-2));
+    min-height:100vh;line-height:1.55;
+  }
+  a{color:var(--gold)}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 22px}
+  header{padding:64px 0 24px;text-align:center}
+  .badge{display:inline-block;font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--gold);border:1px solid var(--line);border-radius:999px;padding:6px 14px;margin-bottom:22px}
+  h1{font-size:clamp(38px,7vw,64px);margin:.1em 0 .15em;line-height:1.05;letter-spacing:-.02em}
+  h1 .suit{color:var(--gold)}
+  .tag{font-size:clamp(17px,2.4vw,21px);color:var(--muted);max-width:640px;margin:0 auto 34px}
+  .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:10px;text-decoration:none;font-weight:700;
+    padding:15px 26px;border-radius:14px;font-size:17px;transition:transform .12s ease,box-shadow .12s ease}
+  .btn-primary{background:var(--gold);color:var(--ink);box-shadow:0 10px 30px #f4c54233}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 36px #f4c54244}
+  .btn-ghost{border:1px solid var(--line);color:var(--paper)}
+  .btn-ghost:hover{border-color:var(--gold)}
+  .fineprint{color:var(--muted);font-size:14px;margin-top:14px}
+
+  .hero-cards{display:flex;gap:12px;justify-content:center;margin:44px 0 8px}
+  .pcard{width:78px;height:110px;background:var(--paper);border-radius:12px;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;box-shadow:0 16px 40px #0006;
+    transform:rotate(var(--r));font-weight:800}
+  .pcard .r{font-size:30px;line-height:1}
+  .pcard .s{font-size:26px;line-height:1}
+  .red{color:#d64545}.black{color:#141414}
+
+  section{padding:38px 0}
+  h2{font-size:clamp(24px,4vw,32px);margin:0 0 22px;text-align:center}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
+  .feat .ic{font-size:26px;margin-bottom:8px}
+  .feat h3{margin:.2em 0 .35em;font-size:18px}
+  .feat p{margin:0;color:var(--muted);font-size:15px}
+
+  .steps{max-width:640px;margin:0 auto;counter-reset:step;padding:0;list-style:none}
+  .steps li{position:relative;padding:16px 16px 16px 62px;background:var(--card);
+    border:1px solid var(--line);border-radius:14px;margin-bottom:12px}
+  .steps li::before{counter-increment:step;content:counter(step);position:absolute;left:16px;top:50%;
+    transform:translateY(-50%);width:30px;height:30px;border-radius:50%;background:var(--gold);
+    color:var(--ink);font-weight:800;display:grid;place-items:center}
+  .steps b{color:var(--paper)}
+
+  .odds{max-width:520px;margin:0 auto;border-collapse:collapse;width:100%}
+  .odds th,.odds td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left}
+  .odds th{color:var(--gold);font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+  .odds td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+
+  footer{padding:40px 0 60px;text-align:center;color:var(--muted);font-size:14px;border-top:1px solid var(--line);margin-top:20px}
+  .disclaimer{max-width:620px;margin:14px auto 0;font-size:13px;opacity:.8}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <span class="badge">Android · Free</span>
+      <h1>Poker <span class="suit">Odds</span></h1>
+      <p class="tag">Know your chance of winning any Texas&nbsp;Hold'em hand. Pick your cards, add the board, choose your opponents — get instant win probability.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/vtlinh/Poker-Stats/releases/latest/download/poker-odds.apk">
+          ⬇ Download APK
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/vtlinh/Poker-Stats">View on GitHub</a>
+      </div>
+      <p class="fineprint">Latest signed release · Android 8.0+ (API 26). Enable “install unknown apps” to sideload.</p>
+
+      <div class="hero-cards">
+        <div class="pcard" style="--r:-8deg"><span class="r black">A</span><span class="s black">♠</span></div>
+        <div class="pcard" style="--r:4deg"><span class="r red">A</span><span class="s red">♥</span></div>
+      </div>
+    </header>
+
+    <section id="features">
+      <h2>What it does</h2>
+      <div class="grid">
+        <div class="feat"><div class="ic">🃏</div><h3>Tap to pick</h3><p>A clean card selector for your hand and the flop, turn &amp; river.</p></div>
+        <div class="feat"><div class="ic">👥</div><h3>1–9 opponents</h3><p>Model the table size you're actually playing against.</p></div>
+        <div class="feat"><div class="ic">📊</div><h3>Win / tie / equity</h3><p>Split-pot-aware percentages, not just a single number.</p></div>
+        <div class="feat"><div class="ic">📈</div><h3>Hand breakdown</h3><p>How often you improve to a pair, flush, straight, and beyond.</p></div>
+        <div class="feat"><div class="ic">⚡</div><h3>Fast engine</h3><p>100,000 Monte-Carlo deals per query, computed on-device.</p></div>
+        <div class="feat"><div class="ic">🌗</div><h3>Light &amp; dark</h3><p>Looks right whatever your system theme is.</p></div>
+      </div>
+    </section>
+
+    <section id="how">
+      <h2>How to use it</h2>
+      <ol class="steps">
+        <li>Tap the <b>+</b> slots to choose your <b>two hole cards</b>.</li>
+        <li>Optionally add the <b>community cards</b> as they hit the board.</li>
+        <li>Set the number of <b>opponents</b>.</li>
+        <li>Hit <b>Calculate Odds</b> and read your win probability.</li>
+      </ol>
+    </section>
+
+    <section id="odds">
+      <h2>Numbers it gets right</h2>
+      <table class="odds">
+        <thead><tr><th>Starting hand (heads-up)</th><th>Win vs 1 random hand</th></tr></thead>
+        <tbody>
+          <tr><td>A♠ A♥ — pocket aces</td><td>~85%</td></tr>
+          <tr><td>A♠ K♠ — big slick, suited</td><td>~67%</td></tr>
+          <tr><td>7♦ 2♣ — the classic worst</td><td>~35%</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/vtlinh/Poker-Stats/releases/latest/download/poker-odds.apk">⬇ Download APK</a>
+      </div>
+      <p class="disclaimer">Poker Odds is an open-source project for educational and entertainment purposes.
+      It does not involve real-money play. Please gamble responsibly.</p>
+    </footer>
+  </div>
+</body>
+</html>

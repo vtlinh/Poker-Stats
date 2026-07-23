@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="felt_green">#1B7A3D</color>
+    <color name="felt_green_dark">#0E4D25</color>
+    <color name="gold">#F4C542</color>
+    <color name="window_bg">#F1F4F0</color>
+    <color name="ic_launcher_background">#0E4D25</color>
+</resources>
