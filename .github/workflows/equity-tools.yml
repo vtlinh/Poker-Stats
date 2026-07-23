@@ -1,0 +1,35 @@
+name: Equity tools
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'tools/**'
+      - '.github/workflows/equity-tools.yml'
+  pull_request:
+    paths:
+      - 'tools/**'
+      - '.github/workflows/equity-tools.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build & test the equity generator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Build, self-test & unit-test the generator
+        working-directory: tools
+        run: make test
