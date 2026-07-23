@@ -61,7 +61,7 @@ val keystoreProperties = Properties().apply {
 }
 
 fun secret(envKey: String, propKey: String): String? =
-    System.getenv(envKey) ?: keystoreProperties.getProperty(propKey)
+    System.getenv(envKey)?.takeIf { it.isNotBlank() } ?: keystoreProperties.getProperty(propKey)
 
 android {
     namespace = "com.pokerstats.odds"

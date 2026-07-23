@@ -118,7 +118,8 @@ Release signing is driven by secrets (env vars, then optional local
 
 ## CI / CD (GitHub Actions)
 
-- **`ci.yml`** — push/PR: lint, debug APK (`fetch-depth: 0`).
+- **`ci.yml`** — push/PR: lint + a **signed release** APK artifact (same build type
+  that ships), `fetch-depth: 0`.
 - **`equity-tools.yml`** — push/PR touching `tools/**`: builds the C generator and runs its tests.
 - **`release.yml`** — `v*` tag: signed release APK → GitHub Release as `poker-odds.apk`.
 - **`pages.yml`** — deploys `docs/` (download page) to GitHub Pages.
