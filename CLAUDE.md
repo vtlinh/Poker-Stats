@@ -73,9 +73,14 @@ Computed in `app/build.gradle.kts` at build time:
   override with the `BUILD_VERSION` env var.
 
 `versionCode = (major*100 + minor)*1000 + build` (monotonic). CI checks out with
-`fetch-depth: 0` so the weekly commit count is accurate. **Release tags should
-match the computed version** (e.g. `v1.30.2`) so the in-app updater compares
-correctly.
+`fetch-depth: 0` so the weekly commit count is accurate.
+
+On a **release** build, `release.yml` sets `RELEASE_VERSION_NAME` from the git
+tag, which pins the APK's `versionName`/`versionCode` to exactly the tag (e.g.
+tag `v1.30.2` → app version `1.30.2`). This keeps the in-app updater — which
+compares the release tag against the installed app's self-reported version —
+always consistent. Debug/CI builds keep the date-based computation. So: **tag
+each release `v<major>.<minor>.<build>` with an incrementing number.**
 
 ## In-app auto-update
 

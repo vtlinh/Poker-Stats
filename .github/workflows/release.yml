@@ -49,6 +49,9 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          # Pin the APK's versionName to the release tag so the in-app updater
+          # always agrees with the installed app's self-reported version.
+          RELEASE_VERSION_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: ./gradlew :app:assembleRelease --stacktrace
 
       - name: Stage APK
