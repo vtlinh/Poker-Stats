@@ -93,8 +93,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Code/resource shrinking is disabled: this is a tiny app and R8
+            // stripping was crashing the released build on launch. Keep the
+            // proguard files wired up so it can be re-enabled safely later.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

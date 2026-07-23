@@ -9,8 +9,8 @@ import com.pokerstats.odds.ui.theme.PokerStatsTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             PokerStatsTheme {
                 PokerScreen()
