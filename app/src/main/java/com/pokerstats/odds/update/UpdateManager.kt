@@ -148,22 +148,24 @@ object UpdateManager {
 
     // --- helpers -----------------------------------------------------------
 
-    private fun fetchLatestRelease(): JSONObject? = try {
-        val url = URL("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 15_000
-            setRequestProperty("User-Agent", "PokerOdds-Updater")
-            setRequestProperty("Accept", "application/vnd.github+json")
+    private fun fetchLatestRelease(): JSONObject? {
+        return try {
+            val url = URL("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10_000
+                readTimeout = 15_000
+                setRequestProperty("User-Agent", "PokerOdds-Updater")
+                setRequestProperty("Accept", "application/vnd.github+json")
+            }
+            try {
+                if (connection.responseCode != 200) return null
+                JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            null
         }
-        try {
-            if (connection.responseCode != 200) return null
-            JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-        } finally {
-            connection.disconnect()
-        }
-    } catch (e: Exception) {
-        null
     }
 
     private fun findApkAssetUrl(release: JSONObject): String? {
