@@ -128,16 +128,6 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
                     } else {
                         SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
                     }
-
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        state.handClass,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                    )
                 }
 
                 state.result?.let { ResultPanel(it) }
