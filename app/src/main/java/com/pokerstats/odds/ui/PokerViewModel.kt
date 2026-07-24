@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pokerstats.odds.data.EquityDatabase
 import com.pokerstats.odds.data.PreflopEquity
+import com.pokerstats.odds.engine.Rank
 import com.pokerstats.odds.update.UpdateInfo
 import com.pokerstats.odds.update.UpdateManager
 import kotlinx.coroutines.Dispatchers
@@ -31,15 +32,30 @@ data class UpdateUiState(
     val showBanner: Boolean get() = available != null && !dismissed
 }
 
-/** Immutable snapshot of the calculator screen. */
+/**
+ * Immutable snapshot of the calculator screen.
+ *
+ * Preflop equity depends only on the two ranks and whether they are suited, so
+ * the input is two ranks plus a suited flag rather than concrete cards.
+ */
 data class PokerUiState(
-    val hole: List<com.pokerstats.odds.engine.Card> = emptyList(),
+    val rank1: Rank = Rank.ACE,
+    val rank2: Rank = Rank.ACE,
+    val suited: Boolean = false,
     val totalPlayers: Int = MIN_PLAYERS,
     val result: PreflopEquity? = null,
     val update: UpdateUiState = UpdateUiState(),
 ) {
-    val usedCards: Set<com.pokerstats.odds.engine.Card> get() = hole.toSet()
-    val heroComplete: Boolean get() = hole.size == 2
+    val isPair: Boolean get() = rank1 == rank2
+
+    /** Canonical starting-hand key, e.g. "AA", "AKs", "AKo" (higher rank first). */
+    val handClass: String
+        get() {
+            if (rank1 == rank2) return "${rank1.symbol}${rank2.symbol}"
+            val hi = if (rank1.value >= rank2.value) rank1 else rank2
+            val lo = if (rank1.value >= rank2.value) rank2 else rank1
+            return "${hi.symbol}${lo.symbol}${if (suited) "s" else "o"}"
+        }
 }
 
 class PokerViewModel(app: Application) : AndroidViewModel(app) {
@@ -49,18 +65,24 @@ class PokerViewModel(app: Application) : AndroidViewModel(app) {
     private val _uiState = MutableStateFlow(PokerUiState())
     val uiState: StateFlow<PokerUiState> = _uiState.asStateFlow()
 
-    // --- calculator --------------------------------------------------------
-
-    fun addCard(card: com.pokerstats.odds.engine.Card) {
-        _uiState.update { state ->
-            if (state.hole.size >= 2 || state.usedCards.contains(card)) state
-            else state.copy(hole = state.hole + card)
-        }
+    init {
         refreshResult()
     }
 
-    fun removeCard(card: com.pokerstats.odds.engine.Card) {
-        _uiState.update { it.copy(hole = it.hole - card) }
+    // --- calculator --------------------------------------------------------
+
+    fun setRank1(rank: Rank) {
+        _uiState.update { it.copy(rank1 = rank) }
+        refreshResult()
+    }
+
+    fun setRank2(rank: Rank) {
+        _uiState.update { it.copy(rank2 = rank) }
+        refreshResult()
+    }
+
+    fun setSuited(suited: Boolean) {
+        _uiState.update { it.copy(suited = suited) }
         refreshResult()
     }
 
@@ -69,24 +91,14 @@ class PokerViewModel(app: Application) : AndroidViewModel(app) {
         refreshResult()
     }
 
-    fun reset() {
-        _uiState.update { it.copy(hole = emptyList(), result = null) }
-    }
-
     private fun refreshResult() {
-        val state = _uiState.value
-        if (state.hole.size != 2) {
-            if (state.result != null) _uiState.update { it.copy(result = null) }
-            return
-        }
-        val a = state.hole[0]
-        val b = state.hole[1]
-        val players = state.totalPlayers
+        val handClass = _uiState.value.handClass
+        val players = _uiState.value.totalPlayers
         viewModelScope.launch {
-            val equity = withContext(Dispatchers.IO) { equityDb.lookup(a, b, players) }
+            val equity = withContext(Dispatchers.IO) { equityDb.lookup(handClass, players) }
             // Ignore stale lookups if the hand changed while querying.
             _uiState.update { cur ->
-                if (cur.hole == listOf(a, b) && cur.totalPlayers == players) cur.copy(result = equity)
+                if (cur.handClass == handClass && cur.totalPlayers == players) cur.copy(result = equity)
                 else cur
             }
         }

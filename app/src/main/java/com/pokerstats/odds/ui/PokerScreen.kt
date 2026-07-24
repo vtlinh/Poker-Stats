@@ -1,24 +1,24 @@
 package com.pokerstats.odds.ui
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -28,19 +28,18 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,20 +49,16 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pokerstats.odds.data.PreflopEquity
-import com.pokerstats.odds.engine.Card as PlayingCard
 import com.pokerstats.odds.engine.HandCategory
-import com.pokerstats.odds.engine.Suit
-import com.pokerstats.odds.ui.theme.CardWhite
-import com.pokerstats.odds.ui.theme.ChipRed
-import com.pokerstats.odds.ui.theme.InkBlack
+import com.pokerstats.odds.engine.Rank
 import com.pokerstats.odds.ui.theme.LoseRed
 import com.pokerstats.odds.ui.theme.WinGreen
+import kotlin.math.abs
 
 @Composable
 fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var showPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { viewModel.onStart() }
 
@@ -86,25 +81,35 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
                 Header()
 
                 SectionCard(title = "Your Hand") {
-                    CardRow(
-                        cards = state.hole,
-                        onAdd = { showPicker = true },
-                        onRemove = viewModel::removeCard,
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        RankWheel(state.rank1, viewModel::setRank1, Modifier.weight(1f))
+                        RankWheel(state.rank2, viewModel::setRank2, Modifier.weight(1f))
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+
+                    if (state.isPair) {
+                        InfoPill("Pocket pair")
+                    } else {
+                        SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        state.handClass,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
                     )
                 }
 
                 SectionCard(title = "Total Players") {
                     PlayerStepper(state.totalPlayers, viewModel::setPlayers)
-                }
-
-                if (!state.heroComplete) {
-                    Text(
-                        "Pick your two hole cards to see your odds.",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                    )
-                } else {
-                    OutlinedButton(onClick = viewModel::reset) { Text("Clear hand") }
                 }
 
                 state.result?.let { ResultPanel(it) }
@@ -113,18 +118,143 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
             }
         }
     }
+}
 
-    if (showPicker) {
-        CardPickerDialog(
-            used = state.usedCards,
-            onPick = { card ->
-                viewModel.addCard(card)
-                if (state.hole.size + 1 >= 2) showPicker = false
-            },
-            onDismiss = { showPicker = false },
+// --- rank wheel ------------------------------------------------------------
+
+@Composable
+private fun RankWheel(
+    selected: Rank,
+    onSelected: (Rank) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val ranks = remember { Rank.entries.sortedByDescending { it.value } } // A..2
+    val itemHeight = 48.dp
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = ranks.indexOf(selected).coerceAtLeast(0),
+    )
+    val fling = rememberSnapFlingBehavior(lazyListState = listState)
+
+    val centerIndex by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val items = info.visibleItemsInfo
+            if (items.isEmpty()) {
+                ranks.indexOf(selected).coerceAtLeast(0)
+            } else {
+                val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                items.minByOrNull { abs((it.offset + it.size / 2f) - center) }!!.index
+            }
+        }
+    }
+
+    // Report the centered rank once the wheel settles.
+    LaunchedEffect(centerIndex, listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress) {
+            ranks.getOrNull(centerIndex)?.let { if (it != selected) onSelected(it) }
+        }
+    }
+
+    val surface = MaterialTheme.colorScheme.surface
+    Box(modifier = modifier.height(itemHeight * 3), contentAlignment = Alignment.Center) {
+        // Selection window highlight.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(itemHeight)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                    RoundedCornerShape(10.dp),
+                ),
+        )
+        LazyColumn(
+            state = listState,
+            flingBehavior = fling,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            contentPadding = PaddingValues(vertical = itemHeight),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            itemsIndexed(ranks) { index, rank ->
+                val isCenter = index == centerIndex
+                Box(
+                    Modifier.height(itemHeight).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        rank.symbol,
+                        fontSize = if (isCenter) 32.sp else 20.sp,
+                        fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isCenter) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                        },
+                    )
+                }
+            }
+        }
+        // Top & bottom fades for the slot-machine look.
+        Box(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().height(itemHeight)
+                .background(Brush.verticalGradient(listOf(surface, surface.copy(alpha = 0f)))),
+        )
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(itemHeight)
+                .background(Brush.verticalGradient(listOf(surface.copy(alpha = 0f), surface))),
         )
     }
 }
+
+@Composable
+private fun SuitedToggle(suited: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        TogglePill("Suited", selected = suited) { onChange(true) }
+        Spacer(Modifier.width(10.dp))
+        TogglePill("Offsuit", selected = !suited) { onChange(false) }
+    }
+}
+
+@Composable
+private fun TogglePill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+    ) {
+        Text(label, color = fg, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun InfoPill(label: String) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                .padding(horizontal = 24.dp, vertical = 10.dp),
+        ) {
+            Text(
+                label,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+// --- update banner ---------------------------------------------------------
 
 @Composable
 private fun UpdateBanner(
@@ -208,65 +338,6 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
             )
             content()
         }
-    }
-}
-
-@Composable
-private fun CardRow(
-    cards: List<PlayingCard>,
-    onAdd: () -> Unit,
-    onRemove: (PlayingCard) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        cards.forEach { card ->
-            PlayingCardView(
-                card = card,
-                modifier = Modifier.width(84.dp).clickable { onRemove(card) },
-            )
-        }
-        if (cards.size < 2) {
-            EmptySlot(modifier = Modifier.width(84.dp).clickable { onAdd() })
-        }
-        Spacer(Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun PlayingCardView(card: PlayingCard, modifier: Modifier = Modifier) {
-    val suitColor = if (card.suit.isRed) ChipRed else InkBlack
-    Box(
-        modifier = modifier
-            .aspectRatio(0.7f)
-            .clip(RoundedCornerShape(8.dp))
-            .background(CardWhite)
-            .border(1.dp, Color(0x33000000), RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(card.rank.symbol, color = suitColor, fontWeight = FontWeight.Bold, fontSize = 26.sp)
-            Text(card.suit.glyph, color = suitColor, fontSize = 24.sp)
-        }
-    }
-}
-
-@Composable
-private fun EmptySlot(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .aspectRatio(0.7f)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
-                RoundedCornerShape(8.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("+", fontSize = 28.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
     }
 }
 
@@ -408,72 +479,6 @@ private fun CategoryRow(category: HandCategory, percent: Double) {
                     .fillMaxSize()
                     .clip(RoundedCornerShape(3.dp))
                     .background(MaterialTheme.colorScheme.primary),
-            )
-        }
-    }
-}
-
-@Composable
-private fun CardPickerDialog(
-    used: Set<PlayingCard>,
-    onPick: (PlayingCard) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Text(
-                    "Select a card",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(Suit.entries.size),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.height(420.dp),
-                ) {
-                    items(PlayingCard.FULL_DECK) { card ->
-                        val disabled = used.contains(card)
-                        PickerCell(card, disabled) { if (!disabled) onPick(card) }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Done")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PickerCell(card: PlayingCard, disabled: Boolean, onClick: () -> Unit) {
-    val suitColor = if (card.suit.isRed) ChipRed else InkBlack
-    Box(
-        modifier = Modifier
-            .aspectRatio(0.72f)
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (disabled) Color(0xFFBDBDBD) else CardWhite)
-            .border(1.dp, Color(0x22000000), RoundedCornerShape(6.dp))
-            .clickable(enabled = !disabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                card.rank.symbol,
-                color = if (disabled) Color(0x55000000) else suitColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-            Text(
-                card.suit.glyph,
-                color = if (disabled) Color(0x55000000) else suitColor,
-                fontSize = 14.sp,
             )
         }
     }
