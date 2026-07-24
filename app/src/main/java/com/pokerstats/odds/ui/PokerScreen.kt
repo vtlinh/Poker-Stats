@@ -317,6 +317,11 @@ private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
             valueRange = MIN_PLAYERS.toFloat()..MAX_PLAYERS.toFloat(),
             steps = MAX_PLAYERS - MIN_PLAYERS - 1,
         )
+        Text(
+            "Break-even ${"%.1f".format(100.0 / count)}% (1 in $count)",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
     }
 }
 
