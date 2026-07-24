@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -624,7 +625,9 @@ private fun ProgressionRow(result: PreflopEquity) {
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             states.forEachIndexed { i, (_, value) ->
-                if (i > 0) ProgressionArrow()
+                // Keep the arrow's width so columns stay aligned with the labels
+                // row, but hide it (arrows only show above, between the labels).
+                if (i > 0) ProgressionArrow(visible = false)
                 Text(
                     if (folded[i]) "fold" else "%.1f%%".format(value),
                     modifier = Modifier.weight(1f),
@@ -640,11 +643,15 @@ private fun ProgressionRow(result: PreflopEquity) {
 }
 
 @Composable
-private fun ProgressionArrow() {
+private fun ProgressionArrow(visible: Boolean = true) {
     Text(
         "→",
         fontSize = 11.sp,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+        color = if (visible) {
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+        } else {
+            Color.Transparent
+        },
     )
 }
 
@@ -825,9 +832,15 @@ private fun metricColor(pct: Double, breakEven: Double?, sorted: List<Double>): 
     else -> Color.White
 }
 
+// Dark panel behind the ranked list so the colored % chips and labels pop.
+private val ListPanel = Color(0xFF0C1310)
+private val ListRowAlt = Color(0xFF121C17)
+
 /**
- * A ranked list of hands by the current metric, colored to match the grid.
- * Folded (0%) hands are dropped. Updates with the slider and player count.
+ * A ranked list of hands by the current metric. Each hand's value sits on a
+ * colored chip (the same ramp as the grid) so it reads clearly on the dark
+ * panel. Folded (0%) hands are dropped. The list scrolls inside a fixed-height
+ * box; it updates with the slider and player count.
  */
 @Composable
 private fun HandRankingList(title: String, values: List<Pair<String, Double>>, breakEven: Double?) {
@@ -839,38 +852,55 @@ private fun HandRankingList(title: String, values: List<Pair<String, Double>>, b
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Text(
                 "$title — ranked",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = 6.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
             )
-            ranked.forEachIndexed { i, (hand, pct) ->
-                val color = metricColor(pct, breakEven, sorted)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "${i + 1}",
-                        modifier = Modifier.width(28.dp),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    )
-                    Text(
-                        hand,
-                        modifier = Modifier.weight(1f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        "%.1f%%".format(pct),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = color,
-                    )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(ListPanel),
+            ) {
+                itemsIndexed(ranked) { i, (hand, pct) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(if (i % 2 == 1) ListRowAlt else Color.Transparent)
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${i + 1}",
+                            modifier = Modifier.width(32.dp),
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.4f),
+                        )
+                        Text(
+                            hand,
+                            modifier = Modifier.weight(1f),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(metricColor(pct, breakEven, sorted))
+                                .padding(horizontal = 10.dp, vertical = 3.dp),
+                        ) {
+                            Text(
+                                "%.1f%%".format(pct),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                            )
+                        }
+                    }
                 }
             }
         }
