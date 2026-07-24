@@ -1,5 +1,6 @@
 package com.pokerstats.odds.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,7 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,8 +27,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,9 +40,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,6 +57,14 @@ import com.pokerstats.odds.engine.Rank
 import com.pokerstats.odds.ui.theme.LoseRed
 import com.pokerstats.odds.ui.theme.WinGreen
 import kotlin.math.abs
+import kotlin.math.roundToInt
+
+// Background matching the download page: dark slate-green with a top glow.
+private val ScreenBackground = Brush.verticalGradient(
+    0f to Color(0xFF24402E),
+    0.42f to Color(0xFF141C18),
+    1f to Color(0xFF141C18),
+)
 
 @Composable
 fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
@@ -62,7 +73,7 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
 
     LaunchedEffect(Unit) { viewModel.onStart() }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Box(modifier = Modifier.fillMaxSize().background(ScreenBackground)) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (state.update.showBanner) {
                 UpdateBanner(
@@ -80,13 +91,19 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
             ) {
                 Header()
 
+                SectionCard(title = "Total Players") {
+                    PlayerSlider(state.totalPlayers, viewModel::setPlayers)
+                }
+
                 SectionCard(title = "Your Hand") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RankWheel(state.rank1, viewModel::setRank1, Modifier.weight(1f))
-                        RankWheel(state.rank2, viewModel::setRank2, Modifier.weight(1f))
+                        RankWheel(state.rank1, viewModel::setRank1, Modifier.width(78.dp))
+                        Spacer(Modifier.width(28.dp))
+                        RankWheel(state.rank2, viewModel::setRank2, Modifier.width(78.dp))
                     }
 
                     Spacer(Modifier.height(18.dp))
@@ -108,10 +125,6 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
                     )
                 }
 
-                SectionCard(title = "Total Players") {
-                    PlayerStepper(state.totalPlayers, viewModel::setPlayers)
-                }
-
                 state.result?.let { ResultPanel(it) }
 
                 Spacer(Modifier.height(12.dp))
@@ -120,8 +133,9 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
     }
 }
 
-// --- rank wheel ------------------------------------------------------------
+// --- infinite rank wheel ---------------------------------------------------
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RankWheel(
     selected: Rank,
@@ -129,18 +143,25 @@ private fun RankWheel(
     modifier: Modifier = Modifier,
 ) {
     val ranks = remember { Rank.entries.sortedByDescending { it.value } } // A..2
+    val n = ranks.size
     val itemHeight = 48.dp
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = ranks.indexOf(selected).coerceAtLeast(0),
-    )
+
+    // Start deep in a virtually-infinite list, aligned so `selected` is centered.
+    val start = remember {
+        val half = Int.MAX_VALUE / 2
+        half - (half % n) + ranks.indexOf(selected).coerceAtLeast(0)
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
     val fling = rememberSnapFlingBehavior(lazyListState = listState)
+
+    fun rankAt(index: Int): Rank = ranks[((index % n) + n) % n]
 
     val centerIndex by remember {
         derivedStateOf {
             val info = listState.layoutInfo
             val items = info.visibleItemsInfo
             if (items.isEmpty()) {
-                ranks.indexOf(selected).coerceAtLeast(0)
+                start
             } else {
                 val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
                 items.minByOrNull { abs((it.offset + it.size / 2f) - center) }!!.index
@@ -151,7 +172,8 @@ private fun RankWheel(
     // Report the centered rank once the wheel settles.
     LaunchedEffect(centerIndex, listState.isScrollInProgress) {
         if (!listState.isScrollInProgress) {
-            ranks.getOrNull(centerIndex)?.let { if (it != selected) onSelected(it) }
+            val r = rankAt(centerIndex)
+            if (r != selected) onSelected(r)
         }
     }
 
@@ -163,10 +185,10 @@ private fun RankWheel(
                 .fillMaxWidth()
                 .height(itemHeight)
                 .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
                 .border(
                     1.dp,
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
                     RoundedCornerShape(10.dp),
                 ),
         )
@@ -177,14 +199,14 @@ private fun RankWheel(
             contentPadding = PaddingValues(vertical = itemHeight),
             modifier = Modifier.fillMaxSize(),
         ) {
-            itemsIndexed(ranks) { index, rank ->
+            items(count = Int.MAX_VALUE) { index ->
                 val isCenter = index == centerIndex
                 Box(
                     Modifier.height(itemHeight).fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        rank.symbol,
+                        rankAt(index).symbol,
                         fontSize = if (isCenter) 32.sp else 20.sp,
                         fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Normal,
                         color = if (isCenter) {
@@ -254,6 +276,35 @@ private fun InfoPill(label: String) {
     }
 }
 
+@Composable
+private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Players",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            )
+            Text(
+                "$count",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Slider(
+            value = count.toFloat(),
+            onValueChange = { onChange(it.roundToInt()) },
+            valueRange = MIN_PLAYERS.toFloat()..MAX_PLAYERS.toFloat(),
+            steps = MAX_PLAYERS - MIN_PLAYERS - 1,
+        )
+    }
+}
+
 // --- update banner ---------------------------------------------------------
 
 @Composable
@@ -309,15 +360,28 @@ private fun UpdateBanner(
 @Composable
 private fun Header() {
     Column {
-        Text(
-            "Poker Odds",
-            style = MaterialTheme.typography.displaySmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                "Poker like a",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "PRO!",
+                fontFamily = FontFamily.Cursive,
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.rotate(-14f),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Text(
             "Texas Hold'em win probability",
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
     }
 }
@@ -342,31 +406,6 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun PlayerStepper(count: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { onChange(count - 1) }, enabled = count > MIN_PLAYERS) {
-            Text("−", fontSize = 26.sp, color = MaterialTheme.colorScheme.onSurface)
-        }
-        Text(
-            "$count",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.width(48.dp),
-            textAlign = TextAlign.Center,
-        )
-        IconButton(onClick = { onChange(count + 1) }, enabled = count < MAX_PLAYERS) {
-            Text("+", fontSize = 26.sp, color = MaterialTheme.colorScheme.onSurface)
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            "players (you + ${count - 1})",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-        )
-    }
-}
-
-@Composable
 private fun ResultPanel(result: PreflopEquity) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -384,13 +423,6 @@ private fun ResultPanel(result: PreflopEquity) {
                 style = MaterialTheme.typography.displaySmall,
                 color = WinGreen,
             )
-            if (result.tiePercent >= 0.05) {
-                Text(
-                    "Includes %.1f%% ties (counted as wins)".format(result.tiePercent),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                )
-            }
 
             Spacer(Modifier.height(16.dp))
             OutcomeBar(result.winCountingTiesPercent, result.losePercent)
