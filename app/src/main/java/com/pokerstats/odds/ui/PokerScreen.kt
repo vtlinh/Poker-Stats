@@ -218,12 +218,6 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
                 },
                 control = { FoldModeToggle(postFlop) { postFlop = it } },
             )
-            Text(
-                "Win Probability: yellow = break-even ${"%.1f".format(breakEven)}%. " +
-                    "Fold grid: red→green by rank (median = yellow). Black = fold.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
         }
 
         Spacer(Modifier.height(12.dp))
