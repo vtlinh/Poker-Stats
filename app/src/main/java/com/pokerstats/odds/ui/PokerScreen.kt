@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -74,7 +75,7 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
     LaunchedEffect(Unit) { viewModel.onStart() }
 
     Box(modifier = Modifier.fillMaxSize().background(ScreenBackground)) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             if (state.update.showBanner) {
                 UpdateBanner(
                     state = state.update,
@@ -379,7 +380,7 @@ private fun Header() {
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            "Texas Hold'em win probability",
+            "Win big, play like a PRO!",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
