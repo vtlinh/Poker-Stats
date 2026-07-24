@@ -164,7 +164,7 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
             }
         }
 
-        state.result?.let { ResultPanel(it) }
+        state.result?.let { ResultPanel(it, state.table) }
 
         Spacer(Modifier.height(12.dp))
     }
@@ -551,14 +551,14 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ResultPanel(result: PreflopEquity) {
+private fun ResultPanel(result: PreflopEquity, table: List<PreflopEquity>) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            ProgressionRow(result)
+            ProgressionRow(result, table)
 
             if (result.categoryFrequency.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
@@ -583,34 +583,32 @@ private fun ResultPanel(result: PreflopEquity) {
  * The win-probability progression across streets on one line:
  *   Default → Pre-flop → Post-flop → Turn → River
  *      A%   →    B%    →    C%     →  D%  →   E%
- * Each value is tinted by its rank among the states (red = weakest, green =
- * strongest — the same ramp the Table fold grids use); a state the hero folds
- * (below break-even pre-flop) shows "fold".
+ * Each value is tinted with the **exact same color it has in that metric's Table
+ * grid** (break-even ramp for Win Probability, rank among all 169 hands for the
+ * fold modes) — so a hand's colors match between the Hands and Table tabs. `table`
+ * is every hand at the current player count. A state the hero folds shows "fold".
  */
 @Composable
-private fun ProgressionRow(result: PreflopEquity) {
-    val states = listOf(
-        "Default" to result.winCountingTiesPercent,
-        "Pre-flop" to result.winFoldCountingTiesPercent,
-        "Post-flop" to result.postFoldCountingTiesPercent,
-        "Turn" to result.turnFoldCountingTiesPercent,
-        "River" to result.riverFoldCountingTiesPercent,
-    )
-    // Only "Default" is defined for a hand folded pre-flop; the rest read "fold".
-    val heroFolds = result.winCountingTies < 1.0 / result.players
-    val folded = states.mapIndexed { i, _ -> i > 0 && heroFolds }
-    val playing = states.filterIndexed { i, _ -> !folded[i] }.map { it.second }.sorted()
-
-    fun colorFor(i: Int): Color = when {
-        folded[i] -> Color(0xFF6A6A6A)
-        playing.size > 1 ->
-            rampColor(playing.count { it < states[i].second }.toFloat() / (playing.size - 1))
-        else -> Color.White
+private fun ProgressionRow(result: PreflopEquity, table: List<PreflopEquity>) {
+    val players = result.players
+    val heroFolds = result.winCountingTies < 1.0 / players
+    // One cell per Table mode, colored by that grid's own scheme (via metricColor).
+    val cells = tableModes(players).mapIndexed { i, mode ->
+        val value = mode.value(result)
+        val folded = i > 0 && heroFolds
+        val color = if (folded) {
+            Color(0xFF6A6A6A)
+        } else {
+            val breakEven = if (mode.breakEvenColoring) 100.0 / players else null
+            val sorted = table.map { mode.value(it) }.filter { it > 0.01 }.sorted()
+            metricColor(value, breakEven, sorted)
+        }
+        Triple(mode.tick, if (folded) "fold" else "%.1f%%".format(value), color)
     }
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            states.forEachIndexed { i, (label, _) ->
+            cells.forEachIndexed { i, (label, _, _) ->
                 if (i > 0) ProgressionArrow()
                 Text(
                     label,
@@ -624,18 +622,18 @@ private fun ProgressionRow(result: PreflopEquity) {
         }
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            states.forEachIndexed { i, (_, value) ->
+            cells.forEachIndexed { i, (_, text, color) ->
                 // Keep the arrow's width so columns stay aligned with the labels
                 // row, but hide it (arrows only show above, between the labels).
                 if (i > 0) ProgressionArrow(visible = false)
                 Text(
-                    if (folded[i]) "fold" else "%.1f%%".format(value),
+                    text,
                     modifier = Modifier.weight(1f),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    color = colorFor(i),
+                    color = color,
                 )
             }
         }
