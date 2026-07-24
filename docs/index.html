@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="theme-color" content="#141c18" />
-<title>Poker Pro</title>
+<title>Poker like a PRO</title>
 <meta name="description" content="Win big, go home rich!" />
 <style>
   :root{
@@ -26,7 +26,12 @@
   }
   .logo-link:hover .logo{transform:translateY(-3px);box-shadow:0 16px 48px rgba(230,182,60,.45)}
   .logo-link:active .logo{transform:translateY(0)}
-  h1{font-size:40px;letter-spacing:-.5px;font-weight:800}
+  h1{display:flex;align-items:flex-end;justify-content:center;gap:10px;flex-wrap:wrap}
+  h1 .lead{font-size:32px;letter-spacing:-.5px;font-weight:800;color:var(--fg)}
+  h1 .pro{
+    font-family:cursive;font-size:52px;font-weight:800;line-height:.9;
+    color:var(--accent);transform:rotate(-14deg);display:inline-block;
+  }
   p.sub{color:var(--muted);font-size:16px;margin:12px 0 36px}
   a.download{
     display:inline-block;background:var(--accent);color:#17130a;text-decoration:none;
@@ -40,8 +45,8 @@
 </head>
 <body>
 <main>
-  <a class="logo-link" href="https://github.com/vtlinh/Poker-Stats" aria-label="Poker Pro on GitHub" title="View on GitHub">
-    <svg class="logo" viewBox="0 0 96 96" role="img" aria-label="Poker Pro">
+  <a class="logo-link" href="https://github.com/vtlinh/Poker-Stats" aria-label="Poker like a PRO on GitHub" title="View on GitHub">
+    <svg class="logo" viewBox="0 0 96 96" role="img" aria-label="Poker like a PRO">
       <defs>
         <linearGradient id="felt" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stop-color="#1f8a45"/>
@@ -52,7 +57,7 @@
       <path fill="#f7f7f2" d="M48 22 C39 33 26 41 26 54 C26 62.5 32 68 39.5 68 C43 68 45.4 66.8 47 64.6 C46.4 71 44.6 75.5 40 79 L56 79 C51.4 75.5 49.6 71 49 64.6 C50.6 66.8 53 68 56.5 68 C64 68 70 62.5 70 54 C70 41 57 33 48 22 Z"/>
     </svg>
   </a>
-  <h1>Poker Pro</h1>
+  <h1><span class="lead">Poker like a</span><span class="pro">PRO!</span></h1>
   <p class="sub">Win big, go home rich!</p>
   <a class="download" href="https://github.com/vtlinh/Poker-Stats/releases/download/poker-latest/poker-odds.apk">Download APK</a>
 </main>
