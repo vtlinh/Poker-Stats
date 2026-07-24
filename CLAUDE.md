@@ -58,7 +58,9 @@ tools/                                 # C + Python generator for poker_equity.d
     misses).
 - The UI has two tabs in a sticky footer: **Hands** (the single-hand
   calculator) and **Table** — a 13×13 starting-hand matrix rendered once per
-  probability (color-graded red→green within each grid; folded 0% cells black).
+  probability. Cells are colored relative to the break-even line 1/N: yellow at
+  break-even, easing (`|t|^0.6` on `t = log2(equity / breakEven)` clamped to
+  ±1) toward vivid green above and red below; folded 0% cells are black.
   The matrix reads every class for the current player count via
   `EquityDatabase.lookupAll(players)`.
 - `EquityDatabase` copies the asset to the app's databases dir on first use and
