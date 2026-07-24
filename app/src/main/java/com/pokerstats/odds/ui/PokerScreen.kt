@@ -65,11 +65,11 @@ import com.pokerstats.odds.ui.theme.WinGreen
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-// Background matching the download page: dark slate-green with a top glow.
+// Deep, near-black slate-green with a subtle top glow.
 private val ScreenBackground = Brush.verticalGradient(
-    0f to Color(0xFF24402E),
-    0.42f to Color(0xFF141C18),
-    1f to Color(0xFF141C18),
+    0f to Color(0xFF16291D),
+    0.42f to Color(0xFF0B0F0D),
+    1f to Color(0xFF080A09),
 )
 
 @Composable
