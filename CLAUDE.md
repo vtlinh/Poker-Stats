@@ -4,7 +4,7 @@ Guidance for Claude Code (and humans) working in this repository.
 
 ## What this is
 
-**Poker Odds** is a native Android app that shows your probability of winning a
+**Poker Pro** is a native Android app that shows your probability of winning a
 Texas Hold'em hand *preflop*. You pick your two hole cards and the total number
 of players (2–6); the app answers with a **single database lookup** of
 precomputed equities — it does **no** poker math at runtime.
