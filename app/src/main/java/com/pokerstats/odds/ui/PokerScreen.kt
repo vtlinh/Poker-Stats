@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -427,28 +428,14 @@ private fun ResultPanel(result: PreflopEquity) {
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
         Column(Modifier.padding(20.dp)) {
-            Text(
-                "Win Probability",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                "%.1f%%".format(result.winCountingTiesPercent),
-                style = MaterialTheme.typography.displaySmall,
-                color = WinGreen,
+            SplitMetric(
+                title = "Win Probability",
+                caption = null,
+                winPercent = result.winCountingTiesPercent,
             )
 
-            Spacer(Modifier.height(12.dp))
-            FoldMetric(result)
-
-            Spacer(Modifier.height(16.dp))
-            OutcomeBar(result.winCountingTiesPercent, result.losePercent)
-
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Legend("Win", WinGreen, result.winCountingTiesPercent)
-                Legend("Lose", LoseRed, result.losePercent)
-            }
+            Spacer(Modifier.height(18.dp))
+            FoldSplit(result)
 
             if (result.categoryFrequency.isNotEmpty()) {
                 Spacer(Modifier.height(20.dp))
@@ -469,43 +456,67 @@ private fun ResultPanel(result: PreflopEquity) {
     }
 }
 
+/** A titled win/lose split: a header row, the outcome bar, and the legend. */
 @Composable
-private fun FoldMetric(result: PreflopEquity) {
-    // Everyone folds hands below break-even (1/N); the hero included. If the
-    // hero's own hand is below break-even, the hero folds rather than plays.
-    val heroFolds = result.winCountingTies < 1.0 / result.players
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
+private fun SplitMetric(title: String, caption: String?, winPercent: Double) {
+    val losePercent = (100.0 - winPercent).coerceIn(0.0, 100.0)
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        if (caption != null) {
             Text(
-                "Pre-flop fold",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                if (heroFolds) {
-                    "below break-even (1 in ${result.players}) — fold this hand"
-                } else {
-                    "if weak hands fold below break-even (1 in ${result.players})"
-                },
+                caption,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
         }
-        Spacer(Modifier.width(12.dp))
-        Text(
-            if (heroFolds) "Fold" else "%.1f%%".format(result.winFoldCountingTiesPercent),
-            style = MaterialTheme.typography.headlineSmall,
-            color = if (heroFolds) LoseRed else MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
+        Spacer(Modifier.height(10.dp))
+        OutcomeBar(winPercent, losePercent)
+    }
+}
+
+/**
+ * The pre-flop-fold win/lose split, shown below the normal split. Everyone
+ * folds hands below break-even (1/N), the hero included — so a below-break-even
+ * hand is a fold rather than a playable split.
+ */
+@Composable
+private fun FoldSplit(result: PreflopEquity) {
+    val heroFolds = result.winCountingTies < 1.0 / result.players
+    if (heroFolds) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Pre-flop fold",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "below break-even (1 in ${result.players}) — fold this hand",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Fold",
+                style = MaterialTheme.typography.headlineSmall,
+                color = LoseRed,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    } else {
+        SplitMetric(
+            title = "Pre-flop fold",
+            caption = "if weak hands fold below break-even (1 in ${result.players})",
+            winPercent = result.winFoldCountingTiesPercent,
         )
     }
 }
@@ -515,24 +526,41 @@ private fun OutcomeBar(win: Double, lose: Double) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(22.dp)
-            .clip(RoundedCornerShape(11.dp)),
+            .height(30.dp)
+            .clip(RoundedCornerShape(15.dp)),
     ) {
-        if (win > 0) Box(Modifier.weight(win.toFloat()).fillMaxSize().background(WinGreen))
-        if (lose > 0) Box(Modifier.weight(lose.toFloat()).fillMaxSize().background(LoseRed))
+        BarSegment("Win", win, WinGreen)
+        BarSegment("Lose", lose, LoseRed)
     }
 }
 
+/** A weighted colored bar segment with its percentage labelled inside it. */
 @Composable
-private fun Legend(label: String, color: Color, percent: Double) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(color))
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "$label %.1f%%".format(percent),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+private fun RowScope.BarSegment(label: String, percent: Double, color: Color) {
+    if (percent <= 0) return
+    Box(
+        modifier = Modifier
+            .weight(percent.toFloat())
+            .fillMaxSize()
+            .background(color),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Word + number when the segment is wide enough, else just the number,
+        // else nothing (the colour still carries the meaning).
+        val text = when {
+            percent >= 25 -> "%s %.1f%%".format(label, percent)
+            percent >= 9 -> "%.0f%%".format(percent)
+            else -> ""
+        }
+        if (text.isNotEmpty()) {
+            Text(
+                text,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
     }
 }
 
