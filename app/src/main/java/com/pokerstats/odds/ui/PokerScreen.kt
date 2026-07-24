@@ -65,11 +65,11 @@ import com.pokerstats.odds.ui.theme.WinGreen
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-// Background matching the download page: dark slate-green with a top glow.
+// Deep, near-black slate-green with a subtle top glow.
 private val ScreenBackground = Brush.verticalGradient(
-    0f to Color(0xFF24402E),
-    0.42f to Color(0xFF141C18),
-    1f to Color(0xFF141C18),
+    0f to Color(0xFF16291D),
+    0.42f to Color(0xFF0B0F0D),
+    1f to Color(0xFF080A09),
 )
 
 @Composable
@@ -128,16 +128,6 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
                     } else {
                         SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
                     }
-
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        state.handClass,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                    )
                 }
 
                 state.result?.let { ResultPanel(it) }
@@ -294,23 +284,14 @@ private fun InfoPill(label: String) {
 @Composable
 private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
     Column {
-        Row(
+        Text(
+            "$count",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Players",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-            )
-            Text(
-                "$count",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+            textAlign = TextAlign.Center,
+        )
         Slider(
             value = count.toFloat(),
             onValueChange = { onChange(it.roundToInt()) },
@@ -321,6 +302,8 @@ private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
             "Break-even ${"%.1f".format(100.0 / count)}% (1 in $count)",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
         )
     }
 }
