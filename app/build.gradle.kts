@@ -36,24 +36,22 @@ fun commitsThisWeek(): Int = try {
 
 val verBuild: Int = System.getenv("BUILD_VERSION")?.toIntOrNull() ?: (commitsThisWeek() + 1)
 
-// On a release build, RELEASE_VERSION_NAME (set from the git tag in release.yml)
-// pins the APK's version to exactly the tag, so the in-app updater — which
-// compares the release tag against the installed version — always agrees with
-// what the app reports about itself. Otherwise fall back to the date-based
-// computation above.
-val releaseOverride: String? =
-    System.getenv("RELEASE_VERSION_NAME")?.trim()?.removePrefix("v")?.takeIf { it.isNotEmpty() }
+// The tagless rolling release (release.yml) rebuilds the signed APK on every
+// push to main and pins its version via these env vars:
+//   VERSION_CODE — monotonic integer the in-app updater compares. CI sets it to
+//                  1_000_000 + the workflow run number, always above older
+//                  installs, so every new build is offered as an update.
+//   VERSION_NAME — cosmetic "major.minor.build" shown in the UI and updater.
+// Local and PR builds fall back to the date-based computation above.
+val versionNameOverride: String? =
+    System.getenv("VERSION_NAME")?.trim()?.removePrefix("v")?.takeIf { it.isNotEmpty() }
+val versionCodeOverride: Int? = System.getenv("VERSION_CODE")?.toIntOrNull()
 
-val computedVersionName: String = releaseOverride ?: "$verMajor.$verMinor.$verBuild"
+val computedVersionName: String = versionNameOverride ?: "$verMajor.$verMinor.$verBuild"
 
 // Monotonic across weeks/years as long as build < 1000 and week <= 53.
-val computedVersionCode: Int = releaseOverride?.let { version ->
-    val parts = version.split(".")
-    val maj = parts.getOrNull(0)?.toIntOrNull() ?: 0
-    val min = parts.getOrNull(1)?.toIntOrNull() ?: 0
-    val bld = parts.getOrNull(2)?.toIntOrNull() ?: 0
-    (maj * 100 + min) * 1000 + bld
-} ?: ((verMajor * 100 + verMinor) * 1000 + verBuild)
+val computedVersionCode: Int = versionCodeOverride
+    ?: ((verMajor * 100 + verMinor) * 1000 + verBuild)
 
 val keystoreProperties = Properties().apply {
     val f = rootProject.file("keystore.properties")

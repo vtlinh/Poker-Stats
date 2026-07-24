@@ -14,40 +14,49 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Details of an available newer release. */
+/** Details of an available newer build. */
 data class UpdateInfo(
+    val versionCode: Int,
     val versionName: String,
     val downloadUrl: String,
-    val notes: String,
 )
 
 /**
- * Checks GitHub Releases for a newer build, downloads the APK (once per
- * version), installs it, and cleans up stale downloads.
+ * Rolling-release updater.
  *
- * The version scheme is `major.minor.build`; comparison is numeric per
- * component so e.g. 1.30.10 > 1.30.9 and 1.31.1 > 1.30.12.
+ * CI publishes every build from `main` to a single fixed GitHub release tagged
+ * [RELEASE_TAG], clobbering two assets each time:
+ *
+ *  - `poker-odds.apk` — the signed APK
+ *  - `version.json`   — `{ "versionCode": N, "versionName": "a.b.c" }`
+ *
+ * The app fetches the manifest and compares its integer `versionCode` against
+ * its own [BuildConfig.VERSION_CODE]; anything higher is an available update.
+ * There are no git tags and no release enumeration involved — the download URLs
+ * are fixed, so a single unauthenticated GET answers "is there an update?".
  */
 object UpdateManager {
 
     private const val APK_NAME = "poker-odds.apk"
+    private const val MANIFEST_NAME = "version.json"
+    private const val RELEASE_TAG = "poker-latest"
     private const val UPDATES_DIR = "updates"
 
-    /** Returns update details if the latest release is newer than this build. */
+    private val apkUrl: String
+        get() = "https://github.com/${BuildConfig.UPDATE_REPO}/releases/download/$RELEASE_TAG/$APK_NAME"
+
+    private val manifestUrl: String
+        get() = "https://github.com/${BuildConfig.UPDATE_REPO}/releases/download/$RELEASE_TAG/$MANIFEST_NAME"
+
+    /** Returns update details if the rolling release is newer than this build. */
     suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
-        val json = fetchLatestRelease() ?: return@withContext null
-        val tag = json.optString("tag_name").ifEmpty { json.optString("name") }
-        val latest = normalizeVersion(tag)
-        if (latest.isEmpty()) return@withContext null
-
-        val current = normalizeVersion(BuildConfig.VERSION_NAME)
-        if (compareVersions(latest, current) <= 0) return@withContext null
-
-        val apkUrl = findApkAssetUrl(json) ?: return@withContext null
+        val json = fetchManifest() ?: return@withContext null
+        val latestCode = json.optInt("versionCode", -1)
+        if (latestCode <= BuildConfig.VERSION_CODE) return@withContext null
         UpdateInfo(
-            versionName = latest.joinToString("."),
+            versionCode = latestCode,
+            versionName = json.optString("versionName").ifEmpty { latestCode.toString() },
             downloadUrl = apkUrl,
-            notes = json.optString("body").take(500),
         )
     }
 
@@ -61,7 +70,7 @@ object UpdateManager {
         onProgress: (Float) -> Unit = {},
     ): File = withContext(Dispatchers.IO) {
         val dir = File(context.filesDir, UPDATES_DIR).apply { mkdirs() }
-        val target = File(dir, "poker-odds-${info.versionName}.apk")
+        val target = File(dir, "poker-odds-${info.versionCode}.apk")
         if (target.exists() && target.length() > 0) {
             onProgress(1f)
             return@withContext target
@@ -72,7 +81,7 @@ object UpdateManager {
             instanceFollowRedirects = true
             connectTimeout = 15_000
             readTimeout = 30_000
-            setRequestProperty("User-Agent", "PokerOdds-Updater")
+            setRequestProperty("User-Agent", "PokerPro-Updater")
             setRequestProperty("Accept", "application/octet-stream")
         }
         try {
@@ -134,13 +143,9 @@ object UpdateManager {
     fun cleanupOldDownloads(context: Context) {
         val dir = File(context.filesDir, UPDATES_DIR)
         if (!dir.isDirectory) return
-        val current = normalizeVersion(BuildConfig.VERSION_NAME)
         dir.listFiles()?.forEach { file ->
-            val version = file.name.removePrefix("poker-odds-").removeSuffix(".apk")
-            val parsed = normalizeVersion(version)
-            if (file.name.endsWith(".part") ||
-                (parsed.isNotEmpty() && compareVersions(parsed, current) <= 0)
-            ) {
+            val code = file.name.removePrefix("poker-odds-").removeSuffix(".apk").toIntOrNull()
+            if (file.name.endsWith(".part") || (code != null && code <= BuildConfig.VERSION_CODE)) {
                 file.delete()
             }
         }
@@ -148,14 +153,14 @@ object UpdateManager {
 
     // --- helpers -----------------------------------------------------------
 
-    private fun fetchLatestRelease(): JSONObject? {
+    private fun fetchManifest(): JSONObject? {
         return try {
-            val url = URL("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
-            val connection = (url.openConnection() as HttpURLConnection).apply {
+            val connection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
                 connectTimeout = 10_000
                 readTimeout = 15_000
-                setRequestProperty("User-Agent", "PokerOdds-Updater")
-                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "PokerPro-Updater")
+                setRequestProperty("Accept", "application/json")
             }
             try {
                 if (connection.responseCode != 200) return null
@@ -166,32 +171,5 @@ object UpdateManager {
         } catch (e: Exception) {
             null
         }
-    }
-
-    private fun findApkAssetUrl(release: JSONObject): String? {
-        val assets = release.optJSONArray("assets") ?: return null
-        for (i in 0 until assets.length()) {
-            val asset = assets.getJSONObject(i)
-            val name = asset.optString("name")
-            if (name == APK_NAME || name.endsWith(".apk")) {
-                return asset.optString("browser_download_url").ifEmpty { null }
-            }
-        }
-        return null
-    }
-
-    /** Extracts the leading numeric `a.b.c` from a version/tag string. */
-    private fun normalizeVersion(raw: String): List<Int> {
-        val match = Regex("""(\d+)(?:\.(\d+))?(?:\.(\d+))?""").find(raw) ?: return emptyList()
-        return match.groupValues.drop(1).filter { it.isNotEmpty() }.map { it.toInt() }
-    }
-
-    private fun compareVersions(a: List<Int>, b: List<Int>): Int {
-        val n = maxOf(a.size, b.size)
-        for (i in 0 until n) {
-            val diff = a.getOrElse(i) { 0 } - b.getOrElse(i) { 0 }
-            if (diff != 0) return diff
-        }
-        return 0
     }
 }

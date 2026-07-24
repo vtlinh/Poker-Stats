@@ -1,21 +1,25 @@
 name: Release
 
+# Tagless rolling release: every push to main rebuilds the signed APK and
+# publishes it — together with a version.json manifest — to a single fixed
+# GitHub release tagged "poker-latest", clobbering the previous assets. No git
+# tags to create, no version bumps to remember. The in-app updater reads
+# version.json and compares its integer versionCode against the installed build.
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ "main" ]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g. v1.0.0)'
-        required: true
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-latest
+  cancel-in-progress: true
+
 jobs:
   release:
-    name: Build signed APK & publish release
+    name: Build signed APK & publish rolling release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +34,19 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Compute version
+        id: ver
+        run: |
+          MAJOR=$(( $(date -u +%Y) - 2025 ))
+          [ "$MAJOR" -lt 0 ] && MAJOR=0
+          WEEK=$(date -u +%V)
+          NAME="${MAJOR}.${WEEK}.${GITHUB_RUN_NUMBER}"
+          # Keep versionCode above older date-based installs (e.g. 130002).
+          CODE=$(( 1000000 + GITHUB_RUN_NUMBER ))
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Publishing version $NAME (code $CODE)"
 
       - name: Decode keystore
         id: keystore
@@ -49,20 +66,30 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          # Pin the APK's versionName to the release tag so the in-app updater
-          # always agrees with the installed app's self-reported version.
-          RELEASE_VERSION_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+          VERSION_NAME: ${{ steps.ver.outputs.name }}
+          VERSION_CODE: ${{ steps.ver.outputs.code }}
         run: ./gradlew :app:assembleRelease --stacktrace
 
-      - name: Stage APK
+      - name: Stage APK and version manifest
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/poker-odds.apk
+          cat > dist/version.json <<EOF
+          {
+            "versionCode": ${{ steps.ver.outputs.code }},
+            "versionName": "${{ steps.ver.outputs.name }}"
+          }
+          EOF
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Poker Pro ${{ github.event.inputs.tag || github.ref_name }}
-          generate_release_notes: true
-          files: dist/poker-odds.apk
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Create the fixed release once; clobber its assets on every run after.
+          if ! gh release view poker-latest >/dev/null 2>&1; then
+            gh release create poker-latest \
+              --title "Poker Pro (latest)" \
+              --notes "Rolling release — always the newest signed build from main. Download poker-odds.apk below." \
+              --latest
+          fi
+          gh release upload poker-latest dist/poker-odds.apk dist/version.json --clobber
