@@ -146,13 +146,14 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
         SectionCard(title = "Your Hand") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RankWheel(state.rank1, viewModel::setRank1, Modifier.width(72.dp))
+                // Wheels expand to fill the row so the draggable area is as wide
+                // as possible (easier to grab).
+                RankWheel(state.rank1, viewModel::setRank1, Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                RankWheel(state.rank2, viewModel::setRank2, Modifier.weight(1f))
                 Spacer(Modifier.width(16.dp))
-                RankWheel(state.rank2, viewModel::setRank2, Modifier.width(72.dp))
-                Spacer(Modifier.width(20.dp))
                 SuitedControl(
                     isPair = state.isPair,
                     suited = state.suited,
@@ -284,7 +285,7 @@ private fun RankWheel(
 ) {
     val ranks = remember { Rank.entries.sortedByDescending { it.value } } // A..2
     val n = ranks.size
-    val itemHeight = 48.dp
+    val itemHeight = 54.dp   // taller rows = a bigger touch target
 
     // Start deep in a virtually-infinite list, aligned so `selected` is centered.
     val start = remember {
