@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -146,14 +147,15 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
         SectionCard(title = "Your Hand") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Wheels expand to fill the row so the draggable area is as wide
-                // as possible (easier to grab).
-                RankWheel(state.rank1, viewModel::setRank1, Modifier.weight(1f))
+                // Compact wheels; each wheel's touch area (92dp) is wider than its
+                // visible 72dp rectangle, so it's easier to grab.
+                RankWheel(state.rank1, viewModel::setRank1, Modifier.width(92.dp))
+                Spacer(Modifier.width(4.dp))
+                RankWheel(state.rank2, viewModel::setRank2, Modifier.width(92.dp))
                 Spacer(Modifier.width(12.dp))
-                RankWheel(state.rank2, viewModel::setRank2, Modifier.weight(1f))
-                Spacer(Modifier.width(16.dp))
                 SuitedControl(
                     isPair = state.isPair,
                     suited = state.suited,
@@ -162,7 +164,7 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
             }
         }
 
-        state.result?.let { ResultPanel(it) }
+        state.result?.let { ResultPanel(it, state.table) }
 
         Spacer(Modifier.height(12.dp))
     }
@@ -285,7 +287,10 @@ private fun RankWheel(
 ) {
     val ranks = remember { Rank.entries.sortedByDescending { it.value } } // A..2
     val n = ranks.size
-    val itemHeight = 54.dp   // taller rows = a bigger touch target
+    val itemHeight = 48.dp
+    // The visible selection rectangle stays compact; the surrounding `modifier`
+    // width is the (larger) draggable touch area.
+    val windowWidth = 72.dp
 
     // Start deep in a virtually-infinite list, aligned so `selected` is centered.
     val start = remember {
@@ -320,10 +325,10 @@ private fun RankWheel(
 
     val surface = MaterialTheme.colorScheme.surface
     Box(modifier = modifier.height(itemHeight * 3), contentAlignment = Alignment.Center) {
-        // Selection window highlight.
+        // Selection window highlight — fixed compact width (the visible rectangle).
         Box(
             Modifier
-                .fillMaxWidth()
+                .width(windowWidth)
                 .height(itemHeight)
                 .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
@@ -546,14 +551,14 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ResultPanel(result: PreflopEquity) {
+private fun ResultPanel(result: PreflopEquity, table: List<PreflopEquity>) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            ProgressionRow(result)
+            ProgressionRow(result, table)
 
             if (result.categoryFrequency.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
@@ -578,34 +583,32 @@ private fun ResultPanel(result: PreflopEquity) {
  * The win-probability progression across streets on one line:
  *   Default → Pre-flop → Post-flop → Turn → River
  *      A%   →    B%    →    C%     →  D%  →   E%
- * Each value is tinted by its rank among the states (red = weakest, green =
- * strongest — the same ramp the Table fold grids use); a state the hero folds
- * (below break-even pre-flop) shows "fold".
+ * Each value is tinted with the **exact same color it has in that metric's Table
+ * grid** (break-even ramp for Win Probability, rank among all 169 hands for the
+ * fold modes) — so a hand's colors match between the Hands and Table tabs. `table`
+ * is every hand at the current player count. A state the hero folds shows "fold".
  */
 @Composable
-private fun ProgressionRow(result: PreflopEquity) {
-    val states = listOf(
-        "Default" to result.winCountingTiesPercent,
-        "Pre-flop" to result.winFoldCountingTiesPercent,
-        "Post-flop" to result.postFoldCountingTiesPercent,
-        "Turn" to result.turnFoldCountingTiesPercent,
-        "River" to result.riverFoldCountingTiesPercent,
-    )
-    // Only "Default" is defined for a hand folded pre-flop; the rest read "fold".
-    val heroFolds = result.winCountingTies < 1.0 / result.players
-    val folded = states.mapIndexed { i, _ -> i > 0 && heroFolds }
-    val playing = states.filterIndexed { i, _ -> !folded[i] }.map { it.second }.sorted()
-
-    fun colorFor(i: Int): Color = when {
-        folded[i] -> Color(0xFF6A6A6A)
-        playing.size > 1 ->
-            rampColor(playing.count { it < states[i].second }.toFloat() / (playing.size - 1))
-        else -> Color.White
+private fun ProgressionRow(result: PreflopEquity, table: List<PreflopEquity>) {
+    val players = result.players
+    val heroFolds = result.winCountingTies < 1.0 / players
+    // One cell per Table mode, colored by that grid's own scheme (via metricColor).
+    val cells = tableModes(players).mapIndexed { i, mode ->
+        val value = mode.value(result)
+        val folded = i > 0 && heroFolds
+        val color = if (folded) {
+            Color(0xFF6A6A6A)
+        } else {
+            val breakEven = if (mode.breakEvenColoring) 100.0 / players else null
+            val sorted = table.map { mode.value(it) }.filter { it > 0.01 }.sorted()
+            metricColor(value, breakEven, sorted)
+        }
+        Triple(mode.tick, if (folded) "fold" else "%.1f%%".format(value), color)
     }
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            states.forEachIndexed { i, (label, _) ->
+            cells.forEachIndexed { i, (label, _, _) ->
                 if (i > 0) ProgressionArrow()
                 Text(
                     label,
@@ -619,16 +622,18 @@ private fun ProgressionRow(result: PreflopEquity) {
         }
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            states.forEachIndexed { i, (_, value) ->
-                if (i > 0) ProgressionArrow()
+            cells.forEachIndexed { i, (_, text, color) ->
+                // Keep the arrow's width so columns stay aligned with the labels
+                // row, but hide it (arrows only show above, between the labels).
+                if (i > 0) ProgressionArrow(visible = false)
                 Text(
-                    if (folded[i]) "fold" else "%.1f%%".format(value),
+                    text,
                     modifier = Modifier.weight(1f),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    color = colorFor(i),
+                    color = color,
                 )
             }
         }
@@ -636,11 +641,15 @@ private fun ProgressionRow(result: PreflopEquity) {
 }
 
 @Composable
-private fun ProgressionArrow() {
+private fun ProgressionArrow(visible: Boolean = true) {
     Text(
         "→",
         fontSize = 11.sp,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+        color = if (visible) {
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+        } else {
+            Color.Transparent
+        },
     )
 }
 
@@ -821,9 +830,15 @@ private fun metricColor(pct: Double, breakEven: Double?, sorted: List<Double>): 
     else -> Color.White
 }
 
+// Dark panel behind the ranked list so the colored % chips and labels pop.
+private val ListPanel = Color(0xFF0C1310)
+private val ListRowAlt = Color(0xFF121C17)
+
 /**
- * A ranked list of hands by the current metric, colored to match the grid.
- * Folded (0%) hands are dropped. Updates with the slider and player count.
+ * A ranked list of hands by the current metric. Each hand's value sits on a
+ * colored chip (the same ramp as the grid) so it reads clearly on the dark
+ * panel. Folded (0%) hands are dropped. The list scrolls inside a fixed-height
+ * box; it updates with the slider and player count.
  */
 @Composable
 private fun HandRankingList(title: String, values: List<Pair<String, Double>>, breakEven: Double?) {
@@ -835,38 +850,55 @@ private fun HandRankingList(title: String, values: List<Pair<String, Double>>, b
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Text(
                 "$title — ranked",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(bottom = 6.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
             )
-            ranked.forEachIndexed { i, (hand, pct) ->
-                val color = metricColor(pct, breakEven, sorted)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "${i + 1}",
-                        modifier = Modifier.width(28.dp),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    )
-                    Text(
-                        hand,
-                        modifier = Modifier.weight(1f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        "%.1f%%".format(pct),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = color,
-                    )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(ListPanel),
+            ) {
+                itemsIndexed(ranked) { i, (hand, pct) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(if (i % 2 == 1) ListRowAlt else Color.Transparent)
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${i + 1}",
+                            modifier = Modifier.width(32.dp),
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.4f),
+                        )
+                        Text(
+                            hand,
+                            modifier = Modifier.weight(1f),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(metricColor(pct, breakEven, sorted))
+                                .padding(horizontal = 10.dp, vertical = 3.dp),
+                        ) {
+                            Text(
+                                "%.1f%%".format(pct),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                            )
+                        }
+                    }
                 }
             }
         }
