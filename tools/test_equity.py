@@ -75,21 +75,27 @@ def test_more_opponents_lowers_equity(equity_binary):
     assert heads_up > six_way
 
 
-def test_fold_equity_at_least_standard(equity_binary):
-    # Opponents folding weak hands can only help the hero, so the fold-adjusted
-    # win rate is >= the plain win rate for every cell (allow for MC noise).
+def test_fold_equity_model(equity_binary):
+    # Everyone (including the hero) folds hands below break-even (1/N):
+    #  - a clearly-below-break-even hero folds and loses -> fold equity == 0
+    #  - a clearly-above hero plays; opponents folding weak hands only help, so
+    #    the fold-adjusted rate is >= the plain rate (allow for MC noise).
     data = _generate(equity_binary, 40_000)
     for (hand, players), r in data.items():
         std = r["win"] + r["tie"]
         fold = r["win_fold"] + r["tie_fold"]
-        assert fold >= std - 0.02, f"{hand} {players}: fold {fold} < std {std}"
+        threshold = 1.0 / players
         assert 0.0 <= fold <= 1.0
+        if std < threshold - 0.02:
+            assert fold == 0.0, f"{hand} {players}: expected fold 0, got {fold}"
+        elif std > threshold + 0.02:
+            assert fold >= std - 0.02, f"{hand} {players}: fold {fold} < std {std}"
 
 
 def test_fold_boosts_multiway_more_than_headsup(equity_binary):
-    # Folding matters more as the table grows: heads-up there is only one
-    # opponent to fold, six-handed there are five, so AA gains more equity from
-    # the fold assumption six-handed than heads-up.
+    # AA clears break-even at every table size, so it always plays. Folding
+    # matters more as the table grows (more opponents to fold), so AA gains more
+    # equity from the fold assumption six-handed than heads-up.
     data = _generate(equity_binary, 60_000)
 
     def gain(hand, players):
@@ -97,3 +103,11 @@ def test_fold_boosts_multiway_more_than_headsup(equity_binary):
         return (r["win_fold"] + r["tie_fold"]) - (r["win"] + r["tie"])
 
     assert gain("AA", 6) > gain("AA", 2)
+
+
+def test_weak_hero_folds_to_zero(equity_binary):
+    # 72o is far below break-even everywhere, so the hero always folds it.
+    data = _generate(equity_binary, 40_000)
+    for players in (2, 3, 4, 5, 6):
+        r = data[("72o", players)]
+        assert r["win_fold"] + r["tie_fold"] == 0.0

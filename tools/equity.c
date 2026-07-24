@@ -9,9 +9,9 @@
  *     hand<TAB>players<TAB>win<TAB>tie<TAB>lose<TAB>win_fold<TAB>tie_fold<TAB>{category json}
  *
  * `win_fold`/`tie_fold` are the fold-adjusted equity: the hero's win/tie rate
- * once every opponent whose own N-player equity is below break-even (1/N) folds
- * pre-flop. `build_equity_db.py` packs that TSV into the SQLite asset the app
- * ships.
+ * when every player whose own N-player equity is below break-even (1/N) folds
+ * pre-flop. That includes the hero — a below-break-even hero folds and loses
+ * (win_fold = 0). `build_equity_db.py` packs the TSV into the SQLite asset.
  *
  * The 7-card evaluator works directly from rank/suit counts (no 21-subset
  * enumeration); `--selftest` cross-checks it against a brute-force best-of-21
@@ -283,12 +283,13 @@ static result_t simulate(int c1, int c2, int players, long trials, uint64_t seed
 }
 
 /*
- * Fold-adjusted equity: assume every opponent folds pre-flop when their own
- * N-player equity (win + tie) is below the break-even threshold 1/N, and only
- * the rest go to showdown. `equity[class][players]` is the standard preflop
- * equity table computed by the first pass. Hero never folds; if every opponent
- * folds the hero wins uncontested. Ties count as wins for the hero, mirroring
- * the app's headline win-probability metric.
+ * Fold-adjusted equity for a hero who is playing (caller has already checked
+ * the hero's hand clears break-even). Every opponent folds pre-flop when their
+ * own N-player equity (win + tie) is below the break-even threshold 1/N, and
+ * only the rest go to showdown. `equity[class][players]` is the standard
+ * preflop equity table computed by the first pass. If every opponent folds the
+ * hero wins uncontested. Ties count as wins for the hero, mirroring the app's
+ * headline win-probability metric.
  */
 static void simulate_fold(int c1, int c2, int players, long trials, uint64_t seed,
                           const double equity[][MAX_PLAYERS + 1],
@@ -454,14 +455,22 @@ int main(int argc, char **argv) {
     for (int i = 0; i < total; i++)
         equity[tasks[i].hand_idx][tasks[i].players] = results[i].win + results[i].tie;
 
-    /* Pass 2: fold-adjusted equity (opponents below 1/N fold pre-flop). */
+    /* Pass 2: fold-adjusted equity. Everyone folds a hand whose N-player
+     * equity is below break-even (1/N) — including the hero. If the hero's own
+     * hand is below break-even the hero folds and simply loses (win = 0);
+     * otherwise the hero plays on against whichever opponents stayed. */
     double *win_fold = malloc(sizeof(double) * total);
     double *tie_fold = malloc(sizeof(double) * total);
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < total; i++) {
         hand_t h = hands[tasks[i].hand_idx];
-        simulate_fold(h.c1, h.c2, tasks[i].players, trials, (uint64_t)(i + 1 + total),
-                      equity, &win_fold[i], &tie_fold[i]);
+        int p = tasks[i].players;
+        if (equity[tasks[i].hand_idx][p] < 1.0 / p) {
+            win_fold[i] = 0.0; tie_fold[i] = 0.0; /* hero folds -> loses */
+        } else {
+            simulate_fold(h.c1, h.c2, p, trials, (uint64_t)(i + 1 + total),
+                          equity, &win_fold[i], &tie_fold[i]);
+        }
     }
 
     for (int i = 0; i < total; i++) {

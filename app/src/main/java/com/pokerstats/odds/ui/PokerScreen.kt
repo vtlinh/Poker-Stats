@@ -439,7 +439,7 @@ private fun ResultPanel(result: PreflopEquity) {
             )
 
             Spacer(Modifier.height(12.dp))
-            FoldMetric(result.winFoldCountingTiesPercent, result.players)
+            FoldMetric(result)
 
             Spacer(Modifier.height(16.dp))
             OutcomeBar(result.winCountingTiesPercent, result.losePercent)
@@ -470,7 +470,10 @@ private fun ResultPanel(result: PreflopEquity) {
 }
 
 @Composable
-private fun FoldMetric(percent: Double, players: Int) {
+private fun FoldMetric(result: PreflopEquity) {
+    // Everyone folds hands below break-even (1/N); the hero included. If the
+    // hero's own hand is below break-even, the hero folds rather than plays.
+    val heroFolds = result.winCountingTies < 1.0 / result.players
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -488,16 +491,20 @@ private fun FoldMetric(percent: Double, players: Int) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "if weak hands fold below break-even (1 in $players)",
+                if (heroFolds) {
+                    "below break-even (1 in ${result.players}) — fold this hand"
+                } else {
+                    "if weak hands fold below break-even (1 in ${result.players})"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
         }
         Spacer(Modifier.width(12.dp))
         Text(
-            "%.1f%%".format(percent),
+            if (heroFolds) "Fold" else "%.1f%%".format(result.winFoldCountingTiesPercent),
             style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = if (heroFolds) LoseRed else MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Bold,
         )
     }
