@@ -33,6 +33,7 @@ import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -313,32 +314,33 @@ private fun RankWheel(
     }
 }
 
+/** A single switch flipping between Offsuit (off) and Suited (on). */
 @Composable
 private fun SuitedToggle(suited: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        TogglePill("Suited", selected = suited) { onChange(true) }
-        Spacer(Modifier.width(10.dp))
-        TogglePill("Offsuit", selected = !suited) { onChange(false) }
+        SwitchLabel("Offsuit", active = !suited)
+        Spacer(Modifier.width(14.dp))
+        Switch(checked = suited, onCheckedChange = onChange)
+        Spacer(Modifier.width(14.dp))
+        SwitchLabel("Suited", active = suited)
     }
 }
 
 @Composable
-private fun TogglePill(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(bg)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 10.dp),
-    ) {
-        Text(label, color = fg, fontWeight = FontWeight.SemiBold)
-    }
+private fun SwitchLabel(label: String, active: Boolean) {
+    Text(
+        label,
+        color = if (active) {
+            MaterialTheme.colorScheme.onSurface
+        } else {
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+        },
+        fontWeight = FontWeight.SemiBold,
+    )
 }
 
 @Composable
