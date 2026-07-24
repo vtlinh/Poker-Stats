@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -39,7 +40,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,6 +76,10 @@ private val ScreenBackground = Brush.verticalGradient(
     1f to Color(0xFF080A09),
 )
 
+// Ranks high→low, matching the poker-matrix layout (A across the top/left).
+private val MATRIX_RANKS: List<String> =
+    Rank.entries.sortedByDescending { it.value }.map { it.symbol }
+
 @Composable
 fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -88,6 +96,8 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    var tab by rememberSaveable { mutableStateOf(Tab.HANDS) }
+
     Box(modifier = Modifier.fillMaxSize().background(ScreenBackground)) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             if (state.update.showBanner) {
@@ -97,44 +107,112 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
                     onDismiss = viewModel::dismissUpdate,
                 )
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when (tab) {
+                    Tab.HANDS -> HandsTab(state, viewModel)
+                    Tab.TABLE -> TableTab(state, viewModel)
+                }
+            }
+            TabBar(selected = tab, onSelect = { tab = it })
+        }
+    }
+}
+
+/** The two bottom-bar destinations. */
+private enum class Tab(val label: String, val glyph: String) {
+    HANDS("Hands", "♠"),
+    TABLE("Table", "▦"),
+}
+
+/** The original single-hand calculator. */
+@Composable
+private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Header()
+
+        SectionCard(title = "Total Players") {
+            PlayerSlider(state.totalPlayers, viewModel::setPlayers)
+        }
+
+        SectionCard(title = "Your Hand") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Header()
+                RankWheel(state.rank1, viewModel::setRank1, Modifier.width(78.dp))
+                Spacer(Modifier.width(28.dp))
+                RankWheel(state.rank2, viewModel::setRank2, Modifier.width(78.dp))
+            }
 
-                SectionCard(title = "Total Players") {
-                    PlayerSlider(state.totalPlayers, viewModel::setPlayers)
-                }
+            Spacer(Modifier.height(18.dp))
 
-                SectionCard(title = "Your Hand") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RankWheel(state.rank1, viewModel::setRank1, Modifier.width(78.dp))
-                        Spacer(Modifier.width(28.dp))
-                        RankWheel(state.rank2, viewModel::setRank2, Modifier.width(78.dp))
-                    }
-
-                    Spacer(Modifier.height(18.dp))
-
-                    if (state.isPair) {
-                        InfoPill("Pocket pair")
-                    } else {
-                        SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
-                    }
-                }
-
-                state.result?.let { ResultPanel(it) }
-
-                Spacer(Modifier.height(12.dp))
+            if (state.isPair) {
+                InfoPill("Pocket pair")
+            } else {
+                SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
             }
         }
+
+        state.result?.let { ResultPanel(it) }
+
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/**
+ * The whole 13×13 starting-hand matrix, once per probability. Each cell is
+ * color-graded from red (weak) to green (strong) within its own grid; a hand
+ * that folds (0%) is shown black.
+ */
+@Composable
+private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        SectionCard(title = "Total Players") {
+            PlayerSlider(state.totalPlayers, viewModel::setPlayers)
+        }
+
+        if (state.table.isEmpty()) {
+            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+        } else {
+            val breakEven = 1.0 / state.totalPlayers
+            HandMatrix(
+                title = "Win Probability",
+                caption = "Chance to win (ties split), all players to showdown",
+                values = state.table.associate { it.handClass to it.winCountingTiesPercent },
+            )
+            HandMatrix(
+                title = "Pre-flop fold",
+                caption = "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})",
+                values = state.table.associate { it.handClass to it.winFoldCountingTiesPercent },
+            )
+            HandMatrix(
+                title = "Post-flop fold",
+                caption = "Weak hands also fold weak flops (below 1 in ${state.totalPlayers})",
+                values = state.table.associate { it.handClass to it.postFoldCountingTiesPercent },
+            )
+            Text(
+                "Break-even ${"%.1f".format(breakEven * 100)}% — black cells are folds",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
     }
 }
 
@@ -634,5 +712,187 @@ private fun CategoryRow(category: HandCategory, percent: Double) {
                     .background(MaterialTheme.colorScheme.primary),
             )
         }
+    }
+}
+
+// --- hand matrix (Table tab) ----------------------------------------------
+
+/**
+ * A 13×13 grid of the 169 starting hands for one probability. Cells are
+ * color-graded from red (weakest playable) to green (strongest) relative to the
+ * min/max of *this* grid, so each metric uses its full range; a folded hand
+ * (0%) is black. Row/column headers run A→2, suited hands above the diagonal,
+ * offsuit below (the standard poker matrix).
+ */
+@Composable
+private fun HandMatrix(title: String, caption: String, values: Map<String, Double>) {
+    val playing = values.values.filter { it > 0.01 }
+    val lo = playing.minOrNull() ?: 0.0
+    val hi = playing.maxOrNull() ?: 1.0
+    val span = (hi - lo).takeIf { it > 1e-6 } ?: 1.0
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                caption,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.height(10.dp))
+
+            val headerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            // Column headers: a spacer for the row-header gutter, then A→2.
+            Row(Modifier.fillMaxWidth()) {
+                Box(Modifier.width(14.dp))
+                MATRIX_RANKS.forEach { r ->
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        Text(r, fontSize = 8.sp, fontWeight = FontWeight.Bold, color = headerColor)
+                    }
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            MATRIX_RANKS.forEachIndexed { row, rowRank ->
+                Row(Modifier.fillMaxWidth()) {
+                    Box(
+                        Modifier.width(14.dp).height(34.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            rowRank,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = headerColor,
+                        )
+                    }
+                    MATRIX_RANKS.forEachIndexed { col, colRank ->
+                        val handClass = when {
+                            row == col -> "$rowRank$colRank"
+                            row < col -> "${MATRIX_RANKS[row]}${MATRIX_RANKS[col]}s"
+                            else -> "${MATRIX_RANKS[col]}${MATRIX_RANKS[row]}o"
+                        }
+                        val pct = values[handClass] ?: 0.0
+                        val folded = pct <= 0.01
+                        val t = ((pct - lo) / span).toFloat().coerceIn(0f, 1f)
+                        MatrixCell(handClass, pct, t, folded)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.MatrixCell(label: String, pct: Double, t: Float, folded: Boolean) {
+    val bg = if (folded) Color.Black else gradeColor(t)
+    val fg = if (folded) Color(0xFF6A6A6A) else Color.White
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(34.dp)
+            .padding(1.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(bg),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                label,
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = fg,
+                maxLines = 1,
+            )
+            Text(
+                if (folded) "fold" else "%.0f%%".format(pct),
+                fontSize = 7.5.sp,
+                color = fg.copy(alpha = 0.9f),
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * Map a normalized strength `t` (0 weakest, 1 strongest) onto the felt-style
+ * red→olive→green ramp used by the grid.
+ */
+private fun gradeColor(t: Float): Color {
+    val stops = listOf(
+        0.00f to Color(0xFF6E1E12), // dark red
+        0.25f to Color(0xFF8A3A16), // red-brown
+        0.50f to Color(0xFF8C7A1E), // olive
+        0.75f to Color(0xFF5E8A22), // yellow-green
+        1.00f to Color(0xFF2E8B34), // green
+    )
+    val x = t.coerceIn(0f, 1f)
+    for (i in 0 until stops.size - 1) {
+        val (t0, c0) = stops[i]
+        val (t1, c1) = stops[i + 1]
+        if (x <= t1) {
+            val f = if (t1 > t0) (x - t0) / (t1 - t0) else 0f
+            return Color(
+                red = c0.red + (c1.red - c0.red) * f,
+                green = c0.green + (c1.green - c0.green) * f,
+                blue = c0.blue + (c1.blue - c0.blue) * f,
+            )
+        }
+    }
+    return stops.last().second
+}
+
+// --- sticky footer tabs ----------------------------------------------------
+
+@Composable
+private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+    ) {
+        Row(Modifier.fillMaxWidth().navigationBarsPadding()) {
+            Tab.entries.forEach { tab ->
+                TabItem(tab, selected == tab, onSelect, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabItem(
+    tab: Tab,
+    active: Boolean,
+    onSelect: (Tab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val color = if (active) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+    }
+    Column(
+        modifier = modifier
+            .clickable { onSelect(tab) }
+            .padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .width(28.dp)
+                .height(3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent),
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(tab.glyph, fontSize = 18.sp, color = color)
+        Text(tab.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = color)
     }
 }
