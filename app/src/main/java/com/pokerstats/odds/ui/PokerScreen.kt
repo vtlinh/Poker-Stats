@@ -294,23 +294,14 @@ private fun InfoPill(label: String) {
 @Composable
 private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
     Column {
-        Row(
+        Text(
+            "$count",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Players",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-            )
-            Text(
-                "$count",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+            textAlign = TextAlign.Center,
+        )
         Slider(
             value = count.toFloat(),
             onValueChange = { onChange(it.roundToInt()) },
@@ -321,6 +312,8 @@ private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
             "Break-even ${"%.1f".format(100.0 / count)}% (1 in $count)",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
         )
     }
 }
