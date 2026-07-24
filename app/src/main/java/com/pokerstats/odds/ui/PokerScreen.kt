@@ -177,6 +177,9 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
  */
 @Composable
 private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
+    // The fold grid shows pre-flop by default; the toggle switches it to post-flop.
+    var postFlop by rememberSaveable { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -201,16 +204,19 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
                 values = state.table.associate { it.handClass to it.winCountingTiesPercent },
             )
             HandMatrix(
-                title = "Pre-flop fold",
-                caption = "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})",
+                title = if (postFlop) "Post-flop fold" else "Pre-flop fold",
+                caption = if (postFlop) {
+                    "Weak hands also fold weak flops (below 1 in ${state.totalPlayers})"
+                } else {
+                    "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})"
+                },
                 breakEven = breakEven,
-                values = state.table.associate { it.handClass to it.winFoldCountingTiesPercent },
-            )
-            HandMatrix(
-                title = "Post-flop fold",
-                caption = "Weak hands also fold weak flops (below 1 in ${state.totalPlayers})",
-                breakEven = breakEven,
-                values = state.table.associate { it.handClass to it.postFoldCountingTiesPercent },
+                values = state.table.associate {
+                    it.handClass to
+                        if (postFlop) it.postFoldCountingTiesPercent
+                        else it.winFoldCountingTiesPercent
+                },
+                control = { FoldModeToggle(postFlop) { postFlop = it } },
             )
             Text(
                 "Yellow = break-even ${"%.1f".format(breakEven)}%; greener is better, " +
@@ -221,6 +227,22 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
         }
 
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** Switch flipping the fold grid between Pre-flop (off) and Post-flop (on). */
+@Composable
+private fun FoldModeToggle(postFlop: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SwitchLabel("Pre-flop", active = !postFlop)
+        Spacer(Modifier.width(14.dp))
+        Switch(checked = postFlop, onCheckedChange = onChange)
+        Spacer(Modifier.width(14.dp))
+        SwitchLabel("Post-flop", active = postFlop)
     }
 }
 
@@ -739,6 +761,7 @@ private fun HandMatrix(
     caption: String,
     breakEven: Double,
     values: Map<String, Double>,
+    control: (@Composable () -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -756,6 +779,10 @@ private fun HandMatrix(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
+            if (control != null) {
+                Spacer(Modifier.height(12.dp))
+                control()
+            }
             Spacer(Modifier.height(10.dp))
 
             val headerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
