@@ -146,14 +146,15 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
         SectionCard(title = "Your Hand") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Wheels expand to fill the row so the draggable area is as wide
-                // as possible (easier to grab).
-                RankWheel(state.rank1, viewModel::setRank1, Modifier.weight(1f))
+                // Compact wheels; each wheel's touch area (92dp) is wider than its
+                // visible 72dp rectangle, so it's easier to grab.
+                RankWheel(state.rank1, viewModel::setRank1, Modifier.width(92.dp))
+                Spacer(Modifier.width(4.dp))
+                RankWheel(state.rank2, viewModel::setRank2, Modifier.width(92.dp))
                 Spacer(Modifier.width(12.dp))
-                RankWheel(state.rank2, viewModel::setRank2, Modifier.weight(1f))
-                Spacer(Modifier.width(16.dp))
                 SuitedControl(
                     isPair = state.isPair,
                     suited = state.suited,
@@ -285,7 +286,10 @@ private fun RankWheel(
 ) {
     val ranks = remember { Rank.entries.sortedByDescending { it.value } } // A..2
     val n = ranks.size
-    val itemHeight = 54.dp   // taller rows = a bigger touch target
+    val itemHeight = 48.dp
+    // The visible selection rectangle stays compact; the surrounding `modifier`
+    // width is the (larger) draggable touch area.
+    val windowWidth = 72.dp
 
     // Start deep in a virtually-infinite list, aligned so `selected` is centered.
     val start = remember {
@@ -320,10 +324,10 @@ private fun RankWheel(
 
     val surface = MaterialTheme.colorScheme.surface
     Box(modifier = modifier.height(itemHeight * 3), contentAlignment = Alignment.Center) {
-        // Selection window highlight.
+        // Selection window highlight — fixed compact width (the visible rectangle).
         Box(
             Modifier
-                .fillMaxWidth()
+                .width(windowWidth)
                 .height(itemHeight)
                 .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
