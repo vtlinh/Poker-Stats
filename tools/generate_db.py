@@ -32,7 +32,8 @@ def compile_c() -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--trials", type=int, default=1_000_000,
-                    help="Monte-Carlo deals per cell (default 1,000,000)")
+                    help="target Monte-Carlo samples for the rarest hand class "
+                         "(default 1,000,000; commoner classes get more)")
     ap.add_argument("--out", default=DEFAULT_ASSET, help="output SQLite path")
     args = ap.parse_args()
 
@@ -41,7 +42,7 @@ def main() -> None:
     subprocess.run([binary, "--selftest"], check=True, cwd=HERE)
 
     tsv = os.path.join(HERE, "equity.tsv")
-    print(f"simulating {args.trials:,} deals/cell...")
+    print(f"simulating (target {args.trials:,} samples for the rarest class)...")
     with open(tsv, "w") as f:
         subprocess.run([binary, str(args.trials)], check=True, stdout=f, cwd=HERE)
 

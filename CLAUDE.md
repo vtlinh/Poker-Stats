@@ -56,7 +56,12 @@ The numbers are computed **offline**, never in the app:
   evaluator scores a hand directly from rank/suit counts into one comparable
   int (category in the top bits, kicker nibbles below); handles the wheel.
   `./equity --selftest` cross-checks it against a brute-force best-of-21
-  reference over 300k random hands. Default 1,000,000 deals/cell.
+  reference over 300k random hands. It deals whole random tables and records
+  **every** player's outcome at once (aggregating into the 169 classes), reuses
+  each shuffle for several disjoint games, and reduces with integer accumulators
+  so output is deterministic regardless of thread count. The `target` argument
+  (default 1,000,000) is the sample count for the rarest class; commoner classes
+  get proportionally more.
 - `tools/build_equity_db.py` packs the generator's TSV into the SQLite asset;
   `generate_db.py` / `make db` runs the whole pipeline.
 - `tools/test_equity.py` (`make test`) pins canonical equities (`AA` heads-up
