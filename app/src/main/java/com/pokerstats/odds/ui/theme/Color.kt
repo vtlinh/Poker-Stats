@@ -14,3 +14,9 @@ val InkBlack = Color(0xFF141414)
 val WinGreen = Color(0xFF3DBB6B)
 val TieAmber = Color(0xFFE0A83D)
 val LoseRed = Color(0xFFD65C5C)
+
+// Neutral slate palette — deliberately kept clear of the red/amber/green
+// probability ramp so the colored cells and text never collide with the chrome.
+val SlateBg = Color(0xFF10151C)
+val SlateSurface = Color(0xFF1F2833)
+val SlateElevated = Color(0xFF2A3644)
