@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,6 +33,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -153,17 +155,15 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RankWheel(state.rank1, viewModel::setRank1, Modifier.width(78.dp))
-                Spacer(Modifier.width(28.dp))
-                RankWheel(state.rank2, viewModel::setRank2, Modifier.width(78.dp))
-            }
-
-            Spacer(Modifier.height(18.dp))
-
-            if (state.isPair) {
-                InfoPill("Pocket pair")
-            } else {
-                SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
+                RankWheel(state.rank1, viewModel::setRank1, Modifier.width(72.dp))
+                Spacer(Modifier.width(16.dp))
+                RankWheel(state.rank2, viewModel::setRank2, Modifier.width(72.dp))
+                Spacer(Modifier.width(20.dp))
+                SuitedControl(
+                    isPair = state.isPair,
+                    suited = state.suited,
+                    onChange = viewModel::setSuited,
+                )
             }
         }
 
@@ -173,76 +173,98 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
     }
 }
 
+/** One metric the Table grid can show, selected by the mode slider. */
+private class TableMode(
+    val tick: String,   // short label under the slider
+    val title: String,  // grid title
+    val caption: String,
+    val breakEvenColoring: Boolean, // true → break-even ramp; false → rank ramp
+    val value: (PreflopEquity) -> Double,
+)
+
+private fun tableModes(players: Int) = listOf(
+    TableMode(
+        "Default", "Win Probability",
+        "Chance to win (ties split), all players to showdown", true,
+    ) { it.winCountingTiesPercent },
+    TableMode(
+        "Pre-flop", "Pre-flop fold",
+        "Weak hands fold pre-flop (below 1 in $players)", false,
+    ) { it.winFoldCountingTiesPercent },
+    TableMode(
+        "Post-flop", "Post-flop fold",
+        "Weak hands also fold weak flops (below 1 in $players)", false,
+    ) { it.postFoldCountingTiesPercent },
+)
+
 /**
- * The whole 13×13 starting-hand matrix, once per probability. Each cell is
- * color-graded from red (weak) to green (strong) within its own grid; a hand
- * that folds (0%) is shown black.
+ * The Table tab: one 13×13 grid that fills the screen (no scrolling). A slider
+ * picks which metric it shows (Default = Win Probability, then the fold modes).
  */
 @Composable
 private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
-    // The fold grid shows pre-flop by default; the toggle switches it to post-flop.
-    var postFlop by rememberSaveable { mutableStateOf(false) }
+    var modeIndex by rememberSaveable { mutableStateOf(0) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PlayersCard(state.totalPlayers, viewModel::setPlayers)
 
         if (state.table.isEmpty()) {
-            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         } else {
-            val breakEven = 100.0 / state.totalPlayers
+            val modes = tableModes(state.totalPlayers)
+            val mode = modes[modeIndex.coerceIn(0, modes.lastIndex)]
+            ModeSelector(modeIndex, modes.map { it.tick }) { modeIndex = it }
             HandMatrix(
-                title = "Win Probability",
-                caption = "Chance to win (ties split), all players to showdown",
-                breakEven = breakEven,
-                values = state.table.associate { it.handClass to it.winCountingTiesPercent },
-            )
-            HandMatrix(
-                title = if (postFlop) "Post-flop fold" else "Pre-flop fold",
-                caption = if (postFlop) {
-                    "Weak hands also fold weak flops (below 1 in ${state.totalPlayers})"
-                } else {
-                    "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})"
-                },
-                values = state.table.associate {
-                    it.handClass to
-                        if (postFlop) it.postFoldCountingTiesPercent
-                        else it.winFoldCountingTiesPercent
-                },
-                control = { FoldModeToggle(postFlop) { postFlop = it } },
-            )
-            Text(
-                "Win Probability: yellow = break-even ${"%.1f".format(breakEven)}%. " +
-                    "Fold grid: red→green by rank (median = yellow). Black = fold.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.weight(1f),
+                title = mode.title,
+                caption = mode.caption,
+                breakEven = if (mode.breakEvenColoring) 100.0 / state.totalPlayers else null,
+                values = state.table.associate { it.handClass to mode.value(it) },
             )
         }
-
-        Spacer(Modifier.height(12.dp))
     }
 }
 
-/** Switch flipping the fold grid between Pre-flop (off) and Post-flop (on). */
+/** Discrete slider that picks the Table grid's metric, with labels beneath. */
 @Composable
-private fun FoldModeToggle(postFlop: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
+private fun ModeSelector(index: Int, labels: List<String>, onChange: (Int) -> Unit) {
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
-        SwitchLabel("Pre-flop", active = !postFlop)
-        Spacer(Modifier.width(14.dp))
-        Switch(checked = postFlop, onCheckedChange = onChange)
-        Spacer(Modifier.width(14.dp))
-        SwitchLabel("Post-flop", active = postFlop)
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Slider(
+                value = index.toFloat(),
+                onValueChange = { onChange(it.roundToInt()) },
+                valueRange = 0f..labels.lastIndex.toFloat(),
+                steps = (labels.size - 2).coerceAtLeast(0),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                labels.forEachIndexed { i, label ->
+                    Text(
+                        label,
+                        fontSize = 10.sp,
+                        fontWeight = if (i == index) FontWeight.Bold else FontWeight.Normal,
+                        color = if (i == index) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -343,54 +365,37 @@ private fun RankWheel(
     }
 }
 
-/** A single switch flipping between Offsuit (off) and Suited (on). */
+/**
+ * Suited control shown to the right of the hand wheels: a "Suited" label above a
+ * switch (on = suited, off = offsuit). Pairs can't be suited, so they show a
+ * muted "Pair" instead. Fixed width so the wheels don't shift between states.
+ */
 @Composable
-private fun SuitedToggle(suited: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
+private fun SuitedControl(isPair: Boolean, suited: Boolean, onChange: (Boolean) -> Unit) {
+    Column(
+        modifier = Modifier.width(64.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        SwitchLabel("Offsuit", active = !suited)
-        Spacer(Modifier.width(14.dp))
-        Switch(checked = suited, onCheckedChange = onChange)
-        Spacer(Modifier.width(14.dp))
-        SwitchLabel("Suited", active = suited)
-    }
-}
-
-@Composable
-private fun SwitchLabel(label: String, active: Boolean) {
-    Text(
-        label,
-        color = if (active) {
-            MaterialTheme.colorScheme.onSurface
-        } else {
-            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-        },
-        fontWeight = FontWeight.SemiBold,
-    )
-}
-
-@Composable
-private fun InfoPill(label: String) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-                .padding(horizontal = 24.dp, vertical = 10.dp),
-        ) {
+        if (isPair) {
             Text(
-                label,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                fontWeight = FontWeight.SemiBold,
+                "Pair",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
+        } else {
+            Text(
+                "Suited",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Switch(checked = suited, onCheckedChange = onChange)
         }
     }
 }
 
 /** Compact players card: title + count + info on one row, slider below. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayersCard(count: Int, onChange: (Int) -> Unit) {
     Card(
@@ -406,16 +411,10 @@ private fun PlayersCard(count: Int, onChange: (Int) -> Unit) {
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.width(8.dp))
-                InfoTooltip(
-                    "Break-even ${"%.1f".format(100.0 / count)}% (1 in $count) — a hand needs " +
-                        "at least this much equity to be worth playing.",
-                )
-                Spacer(Modifier.weight(1f))
                 Text(
-                    "$count",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
+                    "(Break even: ${"%.1f".format(100.0 / count)}%)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 )
             }
             Slider(
@@ -423,6 +422,22 @@ private fun PlayersCard(count: Int, onChange: (Int) -> Unit) {
                 onValueChange = { onChange(it.roundToInt()) },
                 valueRange = MIN_PLAYERS.toFloat()..MAX_PLAYERS.toFloat(),
                 steps = MAX_PLAYERS - MIN_PLAYERS - 1,
+                thumb = {
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "$count",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                },
             )
         }
     }
@@ -808,19 +823,19 @@ private fun HandMatrix(
     caption: String,
     values: Map<String, Double>,
     breakEven: Double? = null,
-    control: (@Composable () -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     val sorted = values.values.filter { it > 0.01 }.sorted()
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
             Text(
                 title,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
@@ -828,11 +843,7 @@ private fun HandMatrix(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
-            if (control != null) {
-                Spacer(Modifier.height(12.dp))
-                control()
-            }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
 
             val headerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
             // Column headers: a spacer for the row-header gutter, then A→2.
@@ -845,10 +856,11 @@ private fun HandMatrix(
                 }
             }
             Spacer(Modifier.height(2.dp))
+            // The 13 rows share the remaining height so the grid fills the card.
             MATRIX_RANKS.forEachIndexed { row, rowRank ->
-                Row(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().weight(1f)) {
                     Box(
-                        Modifier.width(14.dp).height(34.dp),
+                        Modifier.width(14.dp).fillMaxHeight(),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -896,7 +908,7 @@ private fun RowScope.MatrixCell(label: String, pct: Double, bg: Color, folded: B
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(34.dp)
+            .fillMaxHeight()
             .padding(1.dp)
             .clip(RoundedCornerShape(4.dp))
             .background(bg),
