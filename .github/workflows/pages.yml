@@ -6,6 +6,11 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/pages.yml'
+  # Redeploy after each rolling release so the bundled APK stays current.
+  workflow_run:
+    workflows: [ "Release" ]
+    types: [ completed ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +30,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Bundle the newest signed APK with the page so the download is served
+      # straight from the Pages domain (named poker-pro.apk), no GitHub hop.
+      - name: Bundle latest APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download poker-latest --repo "$GITHUB_REPOSITORY" \
+            --pattern poker-odds.apk --output docs/poker-pro.apk --clobber \
+            || echo "poker-latest APK not found yet; skipping bundle"
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload docs

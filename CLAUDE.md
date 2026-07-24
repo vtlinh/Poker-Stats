@@ -186,7 +186,12 @@ Release signing is driven by secrets (env vars, then optional local
   that ships), `fetch-depth: 0`.
 - **`equity-tools.yml`** — push/PR touching `tools/**`: builds the C generator and runs its tests.
 - **`release.yml`** — push to `main` (tagless rolling release): signed APK + `version.json` clobbered onto the fixed `poker-latest` GitHub Release.
-- **`pages.yml`** — deploys `docs/` (download page) to GitHub Pages.
+- **`pages.yml`** — deploys `docs/` (download page) to GitHub Pages. Runs on
+  `docs/**` changes **and after each `Release`** (`workflow_run`); it pulls the
+  newest `poker-odds.apk` from the `poker-latest` release and bundles it into the
+  site as **`poker-pro.apk`**, so the page's Download button serves the file
+  straight from the Pages domain (no github.com hop). The in-app updater still
+  uses the release's `poker-odds.apk` asset, so existing installs keep updating.
 
 ## Conventions
 
