@@ -44,6 +44,8 @@ data class PokerUiState(
     val suited: Boolean = false,
     val totalPlayers: Int = MIN_PLAYERS,
     val result: PreflopEquity? = null,
+    /** Every hand class at the current player count, for the matrix view. */
+    val table: List<PreflopEquity> = emptyList(),
     val update: UpdateUiState = UpdateUiState(),
 ) {
     val isPair: Boolean get() = rank1 == rank2
@@ -67,6 +69,7 @@ class PokerViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refreshResult()
+        refreshTable()
     }
 
     // --- calculator --------------------------------------------------------
@@ -89,6 +92,7 @@ class PokerViewModel(app: Application) : AndroidViewModel(app) {
     fun setPlayers(count: Int) {
         _uiState.update { it.copy(totalPlayers = count.coerceIn(MIN_PLAYERS, MAX_PLAYERS)) }
         refreshResult()
+        refreshTable()
     }
 
     private fun refreshResult() {
@@ -100,6 +104,17 @@ class PokerViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.update { cur ->
                 if (cur.handClass == handClass && cur.totalPlayers == players) cur.copy(result = equity)
                 else cur
+            }
+        }
+    }
+
+    private fun refreshTable() {
+        val players = _uiState.value.totalPlayers
+        viewModelScope.launch {
+            val rows = withContext(Dispatchers.IO) { equityDb.lookupAll(players) }
+            // Ignore stale results if the player count changed while querying.
+            _uiState.update { cur ->
+                if (cur.totalPlayers == players) cur.copy(table = rows) else cur
             }
         }
     }

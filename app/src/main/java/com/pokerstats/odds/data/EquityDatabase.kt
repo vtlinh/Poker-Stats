@@ -123,6 +123,39 @@ class EquityDatabase(private val appContext: Context) {
         }
     }
 
+    /**
+     * Every hand class for a given player count, for the matrix view. Skips the
+     * category distribution (not shown in the grid) so it stays a cheap single
+     * scan.
+     */
+    fun lookupAll(players: Int): List<PreflopEquity> {
+        val cursor = database().rawQuery(
+            "SELECT hand_class, win, tie, lose, win_fold, tie_fold, post_fold_win, post_fold_tie " +
+                "FROM equity WHERE players = ?",
+            arrayOf(players.toString()),
+        )
+        cursor.use { c ->
+            val out = ArrayList<PreflopEquity>(169)
+            while (c.moveToNext()) {
+                out.add(
+                    PreflopEquity(
+                        handClass = c.getString(0),
+                        players = players,
+                        win = c.getDouble(1),
+                        tie = c.getDouble(2),
+                        lose = c.getDouble(3),
+                        winFold = c.getDouble(4),
+                        tieFold = c.getDouble(5),
+                        postFoldWin = c.getDouble(6),
+                        postFoldTie = c.getDouble(7),
+                        categoryFrequency = emptyMap(),
+                    ),
+                )
+            }
+            return out
+        }
+    }
+
     private fun parseCategories(json: String): Map<HandCategory, Double> {
         val obj = JSONObject(json)
         val map = LinkedHashMap<HandCategory, Double>()
