@@ -4,6 +4,7 @@ Run with:  cd tools && python3 -m pytest -q
 (also invoked by `make test` and the equity-tools CI workflow).
 """
 import os
+import re
 import subprocess
 
 import pytest
@@ -111,3 +112,29 @@ def test_weak_hero_folds_to_zero(equity_binary):
     for players in (2, 3, 4, 5, 6):
         r = data[("72o", players)]
         assert r["win_fold"] + r["tie_fold"] == 0.0
+
+
+def _min_samples(binary, target):
+    """Run the generator and return (min_samples, stderr) from its summary."""
+    res = subprocess.run(
+        [binary, str(target)], cwd=HERE, capture_output=True, text=True, check=True
+    )
+    m = re.search(r"min (\d+) samples/class", res.stderr)
+    assert m, f"no sampling summary on stderr: {res.stderr!r}"
+    return int(m.group(1)), res.stderr
+
+
+def test_every_class_well_sampled(equity_binary):
+    # Guard against a future change that under-samples any of the 169 classes:
+    # at a normal target every class must clear the 1000-sample floor.
+    min_samples, stderr = _min_samples(equity_binary, 20_000)
+    assert min_samples >= 1000, stderr
+    assert "WARNING" not in stderr
+
+
+def test_undersampling_alerts(equity_binary):
+    # With a tiny target the rarest class falls below 1000 samples and the
+    # generator must alert on stderr.
+    min_samples, stderr = _min_samples(equity_binary, 500)
+    assert min_samples < 1000
+    assert "WARNING" in stderr

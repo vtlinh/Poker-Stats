@@ -1,12 +1,16 @@
 /*
  * equity.c — fast Monte-Carlo generator for the precomputed preflop-equity table.
  *
- * For each of the 169 canonical Texas Hold'em starting hands and each total
- * player count (2..MAX_PLAYERS), it Monte-Carlos the win/tie/lose probability
- * and the hero's final-hand-category distribution, and prints one TSV row per
- * (hand, players) to stdout:
+ * For each total player count (2..MAX_PLAYERS) it deals whole random tables and
+ * records the win/tie/lose equity and final-hand-category distribution for
+ * *every* player at once, aggregating into the 169 canonical starting-hand
+ * classes. It prints one TSV row per (hand, players) to stdout:
  *
  *     hand<TAB>players<TAB>win<TAB>tie<TAB>lose<TAB>win_fold<TAB>tie_fold<TAB>{category json}
+ *
+ * `win` is the sole-win rate; `tie` is split-pot *equity* (a k-way tie counts
+ * 1/k, not a whole win); `lose = 1 - win - tie` is the field's share. So the
+ * hero's true equity is `win + tie`.
  *
  * `win_fold`/`tie_fold` are the fold-adjusted equity: the hero's win/tie rate
  * when every player whose own N-player equity is below break-even (1/N) folds
@@ -15,17 +19,19 @@
  *
  * The 7-card evaluator works directly from rank/suit counts (no 21-subset
  * enumeration); `--selftest` cross-checks it against a brute-force best-of-21
- * reference and a set of known hands. Parallelised with OpenMP; each cell is
- * seeded by its index so output is deterministic regardless of thread count.
+ * reference and a set of known hands. Parallelised with OpenMP over deck
+ * shuffles, each seeded by its index and reduced with integer accumulators, so
+ * output is deterministic regardless of thread count.
  *
  * Build:  cc -O3 -fopenmp -o equity equity.c
- * Run:    ./equity [trials]      (default 1000000)
+ * Run:    ./equity [target]     (samples for the rarest class; default 1000000)
  *         ./equity --selftest
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #define MAX_PLAYERS 6
 #define MIN_PLAYERS 2
@@ -227,116 +233,152 @@ static inline int classify(int a, int b) {
     return (card_suit(a) == card_suit(b)) ? g_idx_suited[hi][lo] : g_idx_offsuit[hi][lo];
 }
 
-/* --- one Monte-Carlo cell ----------------------------------------------- */
+/* --- record-everyone Monte-Carlo ---------------------------------------- */
+/*
+ * Rather than fixing one hero hand per cell, each simulated game deals a full
+ * table of `players` random hands sharing one board and records the win/tie
+ * outcome for *every* player at once — so a single game updates several of the
+ * 169 hand-class rows. Ties are scored as split-pot equity: a k-way tie is
+ * worth 1/k, accumulated as the exact integer TIE_SCALE/k (TIE_SCALE =
+ * lcm(2..6) = 60) so the parallel integer reduction is deterministic
+ * regardless of thread count.
+ *
+ * One deck shuffle is reused for as many disjoint games as fit (a `players`
+ * game needs 5 + 2*players cards). That is unbiased: every fixed block of
+ * positions in a uniform shuffle is itself a uniform deal.
+ */
+#define TIE_SCALE 60  /* lcm(2,3,4,5,6): TIE_SCALE/k is exact for k <= 6 */
+
 typedef struct {
-    double win, tie, lose;
-    double cat[9];
-} result_t;
+    long long cnt[NUM_HANDS];        /* appearances of each hand class */
+    long long win[NUM_HANDS];        /* deals won outright */
+    long long tie_scaled[NUM_HANDS]; /* split-pot equity, scaled by TIE_SCALE */
+    long long cat[NUM_HANDS][9];     /* final 7-card category counts */
+} stats_t;
 
-static result_t simulate(int c1, int c2, int players, long trials, uint64_t seed) {
-    int opponents = players - 1;
-    int deck[52], deck_n = 0;
-    for (int c = 0; c < 52; c++) if (c != c1 && c != c2) deck[deck_n++] = c;
+typedef struct {
+    long long cnt[NUM_HANDS];
+    long long win[NUM_HANDS];
+    long long tie_scaled[NUM_HANDS];
+} fold_stats_t;
 
-    int need = 5 + 2 * opponents; /* full board + opponents' hole cards */
-    long wins = 0, ties = 0, losses = 0;
-    long cat_counts[9] = {0};
-
-    rng_t rng;
-    rng_seed(&rng, seed);
-
-    int hero[7];
-    hero[0] = c1; hero[1] = c2;
-    int opp[7];
-
-    for (long t = 0; t < trials; t++) {
-        /* partial Fisher-Yates: draw `need` cards to the front of deck */
-        for (int i = 0; i < need; i++) {
-            int j = i + rng_bounded(&rng, deck_n - i);
-            int tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
-        }
-        /* board = first 5 drawn; opponents' holes follow */
-        for (int i = 0; i < 5; i++) { hero[2 + i] = deck[i]; opp[2 + i] = deck[i]; }
-
-        int hero_score = evaluate(hero, 7);
-        cat_counts[hero_score >> CATEGORY_SHIFT]++;
-
-        int best_opp = -1;
-        int idx = 5;
-        for (int o = 0; o < opponents; o++) {
-            opp[0] = deck[idx++];
-            opp[1] = deck[idx++];
-            int s = evaluate(opp, 7);
-            if (s > best_opp) best_opp = s;
-        }
-
-        if (hero_score > best_opp) wins++;
-        else if (hero_score < best_opp) losses++;
-        else ties++;
-    }
-
-    result_t r;
-    double n = (double)trials;
-    r.win = wins / n; r.tie = ties / n; r.lose = losses / n;
-    for (int c = 0; c < 9; c++) r.cat[c] = cat_counts[c] / n;
-    return r;
+/* Shuffles needed so the rarest cell (a suited hand — 4 of the 1326 two-card
+ * combos — at the smallest table) is sampled ~`target` times. Each 6-max game
+ * is reused for every table size, and a 2-player game deals the fewest hands,
+ * so MIN_PLAYERS sets the pace. A suited class appears 4*MIN_PLAYERS/1326 times
+ * per shuffle-game; solve for the shuffle count. Integer math, no libm. */
+static long shuffles_for(long target) {
+    int block = 5 + 2 * MAX_PLAYERS;
+    int gps = 52 / block;
+    long long num = (long long)target * 1326;
+    long long den = 4LL * MIN_PLAYERS; /* 4 suited combos, smallest table */
+    long games = (long)((num + den - 1) / den);
+    return (games + gps - 1) / gps;
 }
 
 /*
- * Fold-adjusted equity for a hero who is playing (caller has already checked
- * the hero's hand clears break-even). Every opponent folds pre-flop when their
- * own N-player equity (win + tie) is below the break-even threshold 1/N, and
- * only the rest go to showdown. `equity[class][players]` is the standard
- * preflop equity table computed by the first pass. If every opponent folds the
- * hero wins uncontested. Ties count as wins for the hero, mirroring the app's
- * headline win-probability metric.
+ * One shared driver for both passes. Each shuffle deals full 6-max tables; every
+ * table is then *reused* as a nested k-player game for k = 2..MAX_PLAYERS by
+ * taking players 0..k-1 and the same board — so the six 7-card hands are ranked
+ * once and serve every table size. Results land in out_eq[k] / out_fold[k].
+ *
+ * `equity` (win+tie per class, per table size) is required for the fold pass and
+ * NULL for pass 1. When present, a player folds if its class equity is below the
+ * table's break-even 1/k; a folding hero takes nothing.
  */
-static void simulate_fold(int c1, int c2, int players, long trials, uint64_t seed,
-                          const double equity[][MAX_PLAYERS + 1],
-                          double *out_win, double *out_tie) {
-    int opponents = players - 1;
-    int deck[52], deck_n = 0;
-    for (int c = 0; c < 52; c++) if (c != c1 && c != c2) deck[deck_n++] = c;
-
-    int need = 5 + 2 * opponents;
-    double thresh = 1.0 / players;
-    long wins = 0, ties = 0;
-
-    rng_t rng;
-    rng_seed(&rng, seed);
-
-    int hero[7];
-    hero[0] = c1; hero[1] = c2;
-    int opp[7];
-
-    for (long t = 0; t < trials; t++) {
-        for (int i = 0; i < need; i++) {
-            int j = i + rng_bounded(&rng, deck_n - i);
-            int tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
-        }
-        for (int i = 0; i < 5; i++) { hero[2 + i] = deck[i]; opp[2 + i] = deck[i]; }
-
-        int hero_score = evaluate(hero, 7);
-
-        int best_opp = -1;
-        int idx = 5;
-        for (int o = 0; o < opponents; o++) {
-            int a = deck[idx++];
-            int b = deck[idx++];
-            if (equity[classify(a, b)][players] < thresh) continue; /* opponent folds */
-            opp[0] = a; opp[1] = b;
-            int s = evaluate(opp, 7);
-            if (s > best_opp) best_opp = s;
-        }
-
-        if (best_opp < 0) wins++;                 /* everyone folded */
-        else if (hero_score > best_opp) wins++;
-        else if (hero_score == best_opp) ties++;
+static void run_nested(long target, uint64_t seed_base,
+                       const double equity[][MAX_PLAYERS + 1],
+                       stats_t *out_eq, fold_stats_t *out_fold) {
+    int block = 5 + 2 * MAX_PLAYERS;   /* 6-max game: 5 board + 12 hole */
+    int gps = 52 / block;
+    long units = shuffles_for(target);
+    for (int k = 0; k <= MAX_PLAYERS; k++) {
+        if (out_eq) memset(&out_eq[k], 0, sizeof(out_eq[k]));
+        if (out_fold) memset(&out_fold[k], 0, sizeof(out_fold[k]));
     }
 
-    double n = (double)trials;
-    *out_win = wins / n;
-    *out_tie = ties / n;
+    #pragma omp parallel
+    {
+        stats_t *le = out_eq ? calloc(MAX_PLAYERS + 1, sizeof(stats_t)) : NULL;
+        fold_stats_t *lf = out_fold ? calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t)) : NULL;
+        #pragma omp for schedule(dynamic, 256)
+        for (long u = 0; u < units; u++) {
+            rng_t rng;
+            rng_seed(&rng, seed_base + (uint64_t)u);
+            int deck[52];
+            for (int c = 0; c < 52; c++) deck[c] = c;
+            int need = gps * block;
+            for (int i = 0; i < need; i++) {
+                int j = i + rng_bounded(&rng, 52 - i);
+                int tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
+            }
+            for (int g = 0; g < gps; g++) {
+                int base = g * block;
+                int hand[7];
+                for (int i = 0; i < 5; i++) hand[2 + i] = deck[base + i]; /* shared board */
+                int score[MAX_PLAYERS], cls[MAX_PLAYERS];
+                for (int p = 0; p < MAX_PLAYERS; p++) {
+                    int a = deck[base + 5 + 2 * p];
+                    int b = deck[base + 5 + 2 * p + 1];
+                    hand[0] = a; hand[1] = b;
+                    score[p] = evaluate(hand, 7); /* ranked once, reused below */
+                    cls[p] = classify(a, b);
+                }
+                /* Reuse the same six ranked hands as a nested k-player game. */
+                for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++) {
+                    if (le) {
+                        int mx = -1, tc = 0;
+                        for (int p = 0; p < k; p++) {
+                            if (score[p] > mx) { mx = score[p]; tc = 1; }
+                            else if (score[p] == mx) tc++;
+                        }
+                        for (int p = 0; p < k; p++) {
+                            int c = cls[p];
+                            le[k].cnt[c]++;
+                            le[k].cat[c][score[p] >> CATEGORY_SHIFT]++;
+                            if (score[p] == mx) {
+                                if (tc == 1) le[k].win[c]++;
+                                else le[k].tie_scaled[c] += TIE_SCALE / tc;
+                            }
+                        }
+                    }
+                    if (lf) {
+                        double thresh = 1.0 / k;
+                        for (int p = 0; p < k; p++) {
+                            int c = cls[p];
+                            lf[k].cnt[c]++;
+                            if (equity[cls[p]][k] < thresh) continue; /* p folds */
+                            int mx = -1, tc = 0; /* best among staying opponents */
+                            for (int q = 0; q < k; q++) {
+                                if (q == p || equity[cls[q]][k] < thresh) continue;
+                                if (score[q] > mx) { mx = score[q]; tc = 1; }
+                                else if (score[q] == mx) tc++;
+                            }
+                            if (mx < 0 || score[p] > mx) lf[k].win[c]++;
+                            else if (score[p] == mx) lf[k].tie_scaled[c] += TIE_SCALE / (tc + 1);
+                        }
+                    }
+                }
+            }
+        }
+        #pragma omp critical
+        for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
+            for (int c = 0; c < NUM_HANDS; c++) {
+                if (le) {
+                    out_eq[k].cnt[c] += le[k].cnt[c];
+                    out_eq[k].win[c] += le[k].win[c];
+                    out_eq[k].tie_scaled[c] += le[k].tie_scaled[c];
+                    for (int j = 0; j < 9; j++) out_eq[k].cat[c][j] += le[k].cat[c][j];
+                }
+                if (lf) {
+                    out_fold[k].cnt[c] += lf[k].cnt[c];
+                    out_fold[k].win[c] += lf[k].win[c];
+                    out_fold[k].tie_scaled[c] += lf[k].tie_scaled[c];
+                }
+            }
+        free(le);
+        free(lf);
+    }
 }
 
 /* --- self test ----------------------------------------------------------- */
@@ -423,69 +465,79 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--selftest") == 0) {
         return selftest() == 0 ? 0 : 1;
     }
-    long trials = 1000000;
-    if (argc > 1) trials = atol(argv[1]);
+    /* `target` is the sample count for the rarest hand class (a pocket pair);
+     * commoner classes are sampled proportionally more. */
+    long target = 1000000;
+    if (argc > 1) target = atol(argv[1]);
 
     hand_t hands[NUM_HANDS];
     int nh = build_hands(hands);
     build_class_index();
 
-    int nP = MAX_PLAYERS - MIN_PLAYERS + 1;
-    int total = nh * nP;
-    /* flat task list so OpenMP can split evenly */
-    typedef struct { int hand_idx, players; } task_t;
-    task_t *tasks = malloc(sizeof(task_t) * total);
-    int ti = 0;
-    for (int h = 0; h < nh; h++)
-        for (int p = MIN_PLAYERS; p <= MAX_PLAYERS; p++)
-            tasks[ti++] = (task_t){ h, p };
+    /* Per (class, players) outputs. */
+    static double W[NUM_HANDS][MAX_PLAYERS + 1];
+    static double T[NUM_HANDS][MAX_PLAYERS + 1];
+    static double L[NUM_HANDS][MAX_PLAYERS + 1];
+    static double WF[NUM_HANDS][MAX_PLAYERS + 1];
+    static double TF[NUM_HANDS][MAX_PLAYERS + 1];
+    static double CAT[NUM_HANDS][MAX_PLAYERS + 1][9];
+    static double equity[NUM_HANDS][MAX_PLAYERS + 1]; /* win + tie, per class */
 
-    result_t *results = malloc(sizeof(result_t) * total);
-
-    /* Pass 1: standard equity (all players go to showdown). */
-    #pragma omp parallel for schedule(dynamic)
-    for (int i = 0; i < total; i++) {
-        hand_t h = hands[tasks[i].hand_idx];
-        results[i] = simulate(h.c1, h.c2, tasks[i].players, trials, (uint64_t)(i + 1));
-    }
-
-    /* Standard equity (win + tie) indexed by [hand class][players], used by
-     * pass 2 to decide which opponents fold. Class index == hand index. */
-    static double equity[NUM_HANDS][MAX_PLAYERS + 1];
-    for (int i = 0; i < total; i++)
-        equity[tasks[i].hand_idx][tasks[i].players] = results[i].win + results[i].tie;
-
-    /* Pass 2: fold-adjusted equity. Everyone folds a hand whose N-player
-     * equity is below break-even (1/N) — including the hero. If the hero's own
-     * hand is below break-even the hero folds and simply loses (win = 0);
-     * otherwise the hero plays on against whichever opponents stayed. */
-    double *win_fold = malloc(sizeof(double) * total);
-    double *tie_fold = malloc(sizeof(double) * total);
-    #pragma omp parallel for schedule(dynamic)
-    for (int i = 0; i < total; i++) {
-        hand_t h = hands[tasks[i].hand_idx];
-        int p = tasks[i].players;
-        if (equity[tasks[i].hand_idx][p] < 1.0 / p) {
-            win_fold[i] = 0.0; tie_fold[i] = 0.0; /* hero folds -> loses */
-        } else {
-            simulate_fold(h.c1, h.c2, p, trials, (uint64_t)(i + 1 + total),
-                          equity, &win_fold[i], &tie_fold[i]);
+    /* Pass 1: standard equity + category distribution for every table size in a
+     * single set of 6-max shuffles (each reused as nested 2..6-player games). */
+    stats_t *se = calloc(MAX_PLAYERS + 1, sizeof(stats_t));
+    run_nested(target, 0x1ULL << 40, NULL, se, NULL);
+    long long min_samples = LLONG_MAX;
+    int min_class = 0, min_players = 0;
+    for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
+        for (int c = 0; c < NUM_HANDS; c++) {
+            long long n = se[players].cnt[c];
+            if (n < min_samples) { min_samples = n; min_class = c; min_players = players; }
+            double cnt = (double)n;
+            double w = se[players].win[c] / cnt;
+            double t = (double)se[players].tie_scaled[c] / (TIE_SCALE * cnt);
+            W[c][players] = w;
+            T[c][players] = t;
+            L[c][players] = 1.0 - w - t;
+            equity[c][players] = w + t;
+            for (int j = 0; j < 9; j++) CAT[c][players][j] = se[players].cat[c][j] / cnt;
         }
     }
 
-    for (int i = 0; i < total; i++) {
-        hand_t h = hands[tasks[i].hand_idx];
-        result_t r = results[i];
-        printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t{",
-               h.label, tasks[i].players, r.win, r.tie, r.lose, win_fold[i], tie_fold[i]);
-        for (int c = 0; c < 9; c++)
-            printf("%s\"%s\":%.5f", c ? "," : "", CATEGORY_NAMES[c], r.cat[c]);
-        printf("}\n");
-    }
+    /* Report sampling coverage; alert if any (class, players) cell is thinly
+     * sampled. Every cell is worth at least ~`target` samples by design, so a
+     * count below the floor means `target` is too small or the sizing broke. */
+    long long shuffles = shuffles_for(target);
+    fprintf(stderr, "sampling: %lld shuffles (2 passes); min %lld samples/class (%s %dp)\n",
+            shuffles, min_samples, hands[min_class].label, min_players);
+    if (min_samples < 1000)
+        fprintf(stderr, "WARNING: %s %dp has only %lld samples (< 1000) — raise the target\n",
+                hands[min_class].label, min_players, min_samples);
 
-    free(tasks);
-    free(results);
-    free(win_fold);
-    free(tie_fold);
+    /* Pass 2: fold-adjusted equity, deciding folds from the pass-1 table. */
+    fold_stats_t *sf = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+    run_nested(target, 0x2ULL << 40, equity, NULL, sf);
+    for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
+        for (int c = 0; c < NUM_HANDS; c++) {
+            double cnt = (double)sf[players].cnt[c];
+            WF[c][players] = sf[players].win[c] / cnt;
+            TF[c][players] = (double)sf[players].tie_scaled[c] / (TIE_SCALE * cnt);
+        }
+    }
+    free(se);
+    free(sf);
+
+    /* Print class-major, matching build_hands()/classify() order. */
+    for (int c = 0; c < nh; c++) {
+        for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
+            printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t{",
+                   hands[c].label, players,
+                   W[c][players], T[c][players], L[c][players],
+                   WF[c][players], TF[c][players]);
+            for (int j = 0; j < 9; j++)
+                printf("%s\"%s\":%.5f", j ? "," : "", CATEGORY_NAMES[j], CAT[c][players][j]);
+            printf("}\n");
+        }
+    }
     return 0;
 }

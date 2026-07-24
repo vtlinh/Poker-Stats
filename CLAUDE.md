@@ -42,7 +42,9 @@ tools/                                 # C + Python generator for poker_equity.d
   the two cards to a canonical class (`AA`, `AKs`, `AKo`, `72o`, …) and reads
   one indexed row. **No poker math on device — there is no Kotlin evaluator.**
 - The DB stores `win`, `tie`, `lose` and a hand-category distribution per cell.
-  The UI shows win probability with **ties counted as wins** (`win + tie`).
+  `win` is the sole-win rate; `tie` is **split-pot equity** (a k-way tie counts
+  `1/k`, not a whole win); `lose = 1 - win - tie`. The UI shows the hero's
+  equity, `win + tie`.
 - `EquityDatabase` copies the asset to the app's databases dir on first use and
   recopies if the asset's `PRAGMA user_version` changes.
 
@@ -54,7 +56,14 @@ The numbers are computed **offline**, never in the app:
   evaluator scores a hand directly from rank/suit counts into one comparable
   int (category in the top bits, kicker nibbles below); handles the wheel.
   `./equity --selftest` cross-checks it against a brute-force best-of-21
-  reference over 300k random hands. Default 1,000,000 deals/cell.
+  reference over 300k random hands. It deals whole random 6-max tables and
+  records **every** player's outcome at once (aggregating into the 169 classes);
+  each table is **reused as a nested k-player game** for every table size (2..6)
+  by taking players `0..k-1` and the shared board, so the six hands are ranked
+  once and serve all sizes. It also reuses each shuffle for several disjoint
+  games and reduces with integer accumulators, so output is deterministic
+  regardless of thread count. The `target` argument (default 1,000,000) is the
+  sample count for the rarest class; commoner classes get proportionally more.
 - `tools/build_equity_db.py` packs the generator's TSV into the SQLite asset;
   `generate_db.py` / `make db` runs the whole pipeline.
 - `tools/test_equity.py` (`make test`) pins canonical equities (`AA` heads-up
