@@ -200,8 +200,8 @@ private fun tableModes(players: Int) = listOf(
 )
 
 /**
- * The Table tab: one 13×13 grid that fills the screen (no scrolling). A slider
- * picks which metric it shows (Default = Win Probability, then the fold modes).
+ * The Table tab: a 13×13 grid plus a ranked hand list below it, both driven by a
+ * slider that picks the metric (Default = Win Probability, then the fold modes).
  */
 @Composable
 private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
@@ -210,26 +210,29 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PlayersCard(state.totalPlayers, viewModel::setPlayers)
 
         if (state.table.isEmpty()) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         } else {
             val modes = tableModes(state.totalPlayers)
             val mode = modes[modeIndex.coerceIn(0, modes.lastIndex)]
+            val breakEven = if (mode.breakEvenColoring) 100.0 / state.totalPlayers else null
+            val values = state.table.map { it.handClass to mode.value(it) }
             ModeSelector(modeIndex, modes.map { it.tick }) { modeIndex = it }
             HandMatrix(
-                modifier = Modifier.weight(1f),
                 title = mode.title,
                 caption = mode.caption,
-                breakEven = if (mode.breakEvenColoring) 100.0 / state.totalPlayers else null,
-                values = state.table.associate { it.handClass to mode.value(it) },
+                breakEven = breakEven,
+                values = values.toMap(),
             )
+            HandRankingList(mode.title, values, breakEven)
         }
     }
 }
@@ -306,12 +309,12 @@ private fun RankWheel(
         }
     }
 
-    // Report the centered rank once the wheel settles.
-    LaunchedEffect(centerIndex, listState.isScrollInProgress) {
-        if (!listState.isScrollInProgress) {
-            val r = rankAt(centerIndex)
-            if (r != selected) onSelected(r)
-        }
+    // Report the centered rank live as it changes — during the scroll, not just
+    // on settle — so the result updates reactively. The lookup is async, so this
+    // never blocks the other wheel's input.
+    val centerRank by remember { derivedStateOf { rankAt(centerIndex) } }
+    LaunchedEffect(centerRank) {
+        if (centerRank != selected) onSelected(centerRank)
     }
 
     val surface = MaterialTheme.colorScheme.surface
@@ -704,7 +707,7 @@ private fun HandMatrix(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
-        Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,
@@ -728,9 +731,8 @@ private fun HandMatrix(
                 }
             }
             Spacer(Modifier.height(2.dp))
-            // The 13 rows share the remaining height so the grid fills the card.
             MATRIX_RANKS.forEachIndexed { row, rowRank ->
-                Row(Modifier.fillMaxWidth().weight(1f)) {
+                Row(Modifier.fillMaxWidth().height(30.dp)) {
                     Box(
                         Modifier.width(14.dp).fillMaxHeight(),
                         contentAlignment = Alignment.Center,
@@ -750,22 +752,7 @@ private fun HandMatrix(
                         }
                         val pct = values[handClass] ?: 0.0
                         val folded = pct <= 0.01
-                        val bg = when {
-                            folded -> Color.Black
-                            // Win Probability: break-even-anchored (yellow = 1/N).
-                            breakEven != null ->
-                                oddsColor(log2(pct / breakEven).toFloat().coerceIn(-1f, 1f))
-                            // Fold grids: red→green by rank (median = yellow).
-                            else -> {
-                                val rank = sorted.count { it < pct }
-                                val t = if (sorted.size > 1) {
-                                    rank.toFloat() / (sorted.size - 1)
-                                } else {
-                                    0.5f
-                                }
-                                rampColor(t)
-                            }
-                        }
+                        val bg = if (folded) Color.Black else metricColor(pct, breakEven, sorted)
                         MatrixCell(handClass, pct, bg, folded)
                     }
                 }
@@ -820,6 +807,70 @@ private fun oddsColor(t: Float): Color {
 /** Uniform red→green ramp for `t` in [0, 1]: 0 red, 0.5 yellow-green, 1 green. */
 private fun rampColor(t: Float): Color =
     Color.hsl(120f * t.coerceIn(0f, 1f), 0.68f, 0.40f)
+
+/**
+ * The color for a playing hand's value, shared by the grid cells and the ranked
+ * list so they match: break-even ramp for Win Probability (`breakEven != null`),
+ * else rank-based red→green (median = yellow) over `sorted` (the ascending
+ * non-folded values in this metric).
+ */
+private fun metricColor(pct: Double, breakEven: Double?, sorted: List<Double>): Color = when {
+    breakEven != null -> oddsColor(log2(pct / breakEven).toFloat().coerceIn(-1f, 1f))
+    sorted.size > 1 -> rampColor(sorted.count { it < pct }.toFloat() / (sorted.size - 1))
+    else -> Color.White
+}
+
+/**
+ * A ranked list of hands by the current metric, colored to match the grid.
+ * Folded (0%) hands are dropped. Updates with the slider and player count.
+ */
+@Composable
+private fun HandRankingList(title: String, values: List<Pair<String, Double>>, breakEven: Double?) {
+    val ranked = values.filter { it.second > 0.01 }.sortedByDescending { it.second }
+    val sorted = ranked.map { it.second }.sorted()
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                "$title — ranked",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            ranked.forEachIndexed { i, (hand, pct) ->
+                val color = metricColor(pct, breakEven, sorted)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${i + 1}",
+                        modifier = Modifier.width(28.dp),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                    Text(
+                        hand,
+                        modifier = Modifier.weight(1f),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "%.1f%%".format(pct),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = color,
+                    )
+                }
+            }
+        }
+    }
+}
 
 // --- sticky footer tabs ----------------------------------------------------
 
