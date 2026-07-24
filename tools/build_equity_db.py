@@ -18,30 +18,32 @@ def main() -> None:
 
     con = sqlite3.connect(out)
     cur = con.cursor()
-    cur.execute("PRAGMA user_version = 2")
+    cur.execute("PRAGMA user_version = 3")
     cur.execute(
         """CREATE TABLE equity (
-            hand_class TEXT NOT NULL,
-            players    INTEGER NOT NULL,
-            win        REAL NOT NULL,
-            tie        REAL NOT NULL,
-            lose       REAL NOT NULL,
-            win_fold   REAL NOT NULL,
-            tie_fold   REAL NOT NULL,
-            categories TEXT NOT NULL,
+            hand_class    TEXT NOT NULL,
+            players       INTEGER NOT NULL,
+            win           REAL NOT NULL,
+            tie           REAL NOT NULL,
+            lose          REAL NOT NULL,
+            win_fold      REAL NOT NULL,
+            tie_fold      REAL NOT NULL,
+            post_fold_win REAL NOT NULL,
+            post_fold_tie REAL NOT NULL,
+            categories    TEXT NOT NULL,
             PRIMARY KEY (hand_class, players)
         )"""
     )
     rows = 0
     with open(tsv) as f:
         for line in f:
-            key, players, win, tie, lose, win_fold, tie_fold, cats = (
-                line.rstrip("\n").split("\t")
-            )
+            (key, players, win, tie, lose, win_fold, tie_fold,
+             post_fold_win, post_fold_tie, cats) = line.rstrip("\n").split("\t")
             cur.execute(
-                "INSERT INTO equity VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO equity VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (key, int(players), float(win), float(tie), float(lose),
-                 float(win_fold), float(tie_fold), cats),
+                 float(win_fold), float(tie_fold),
+                 float(post_fold_win), float(post_fold_tie), cats),
             )
             rows += 1
     con.commit()

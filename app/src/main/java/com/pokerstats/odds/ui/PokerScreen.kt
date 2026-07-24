@@ -425,6 +425,9 @@ private fun ResultPanel(result: PreflopEquity) {
             Spacer(Modifier.height(18.dp))
             FoldSplit(result)
 
+            Spacer(Modifier.height(18.dp))
+            PostFoldSplit(result)
+
             if (result.categoryFrequency.isNotEmpty()) {
                 Spacer(Modifier.height(20.dp))
                 Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
@@ -505,6 +508,50 @@ private fun FoldSplit(result: PreflopEquity) {
             title = "Pre-flop fold",
             caption = "if weak hands fold below break-even (1 in ${result.players})",
             winPercent = result.winFoldCountingTiesPercent,
+        )
+    }
+}
+
+/**
+ * The post-flop-fold win/lose split, shown below the pre-flop-fold split.
+ * Survivors of the pre-flop round fold weak flops too (equity below the shrunk
+ * break-even 1/remaining), the hero included, averaged over every flop. A hand
+ * the hero folds pre-flop never reaches the flop, so it shows "Fold".
+ */
+@Composable
+private fun PostFoldSplit(result: PreflopEquity) {
+    val heroFolds = result.winCountingTies < 1.0 / result.players
+    if (heroFolds) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Post-flop fold",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "below break-even (1 in ${result.players}) — fold this hand",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Fold",
+                style = MaterialTheme.typography.headlineSmall,
+                color = LoseRed,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    } else {
+        SplitMetric(
+            title = "Post-flop fold",
+            caption = "if weak hands also fold weak flops (averaged over all flops)",
+            winPercent = result.postFoldCountingTiesPercent,
         )
     }
 }

@@ -6,16 +6,23 @@
  * *every* player at once, aggregating into the 169 canonical starting-hand
  * classes. It prints one TSV row per (hand, players) to stdout:
  *
- *     hand<TAB>players<TAB>win<TAB>tie<TAB>lose<TAB>win_fold<TAB>tie_fold<TAB>{category json}
+ *     hand  players  win  tie  lose  win_fold  tie_fold  post_fold_win  post_fold_tie  {cats}
+ *   (tab-separated)
  *
  * `win` is the sole-win rate; `tie` is split-pot *equity* (a k-way tie counts
  * 1/k, not a whole win); `lose = 1 - win - tie` is the field's share. So the
  * hero's true equity is `win + tie`.
  *
- * `win_fold`/`tie_fold` are the fold-adjusted equity: the hero's win/tie rate
+ * `win_fold`/`tie_fold` are the pre-flop-fold equity: the hero's win/tie rate
  * when every player whose own N-player equity is below break-even (1/N) folds
  * pre-flop. That includes the hero — a below-break-even hero folds and loses
- * (win_fold = 0). `build_equity_db.py` packs the TSV into the SQLite asset.
+ * (win_fold = 0).
+ *
+ * `post_fold_win`/`post_fold_tie` add a *second* fold round: after the flop, the
+ * pre-flop survivors also fold when their bucketed flop equity is below
+ * 1/remaining (the hero too — a folded flop counts as a loss), averaged over all
+ * flops. So it can be lower than the pre-flop-fold number for hands that miss the
+ * flop often. `build_equity_db.py` packs the TSV into the SQLite asset.
  *
  * The 7-card evaluator works directly from rank/suit counts (no 21-subset
  * enumeration); `--selftest` cross-checks it against a brute-force best-of-21
@@ -262,6 +269,46 @@ typedef struct {
     long long tie_scaled[NUM_HANDS];
 } fold_stats_t;
 
+/*
+ * Flop texture buckets. The post-flop fold pass needs each player's equity on
+ * the flop only to decide a fold (is it below 1/remaining?), and the shipped
+ * number is averaged over all flops, so a coarse bucket whose error washes out
+ * is enough. A bucket keys on the drivers of flop equity relative to the hand:
+ * the made 5-card category (2 hole + 3 flop), flush-draw strength, and whether
+ * a straight draw is present.  cat(0..8) x flush(0/1/2) x straight(0/1) = 54.
+ */
+#define NUM_BUCKETS (9 * 3 * 2)
+
+static int flop_bucket(int c1, int c2, const int flop[3]) {
+    int five[5] = { c1, c2, flop[0], flop[1], flop[2] };
+    int cat = evaluate(five, 5) >> CATEGORY_SHIFT;      /* 0..8 made hand */
+
+    int sc[4] = {0};
+    for (int i = 0; i < 5; i++) sc[card_suit(five[i])]++;
+    int maxs = 0;
+    for (int s = 0; s < 4; s++) if (sc[s] > maxs) maxs = sc[s];
+    int flush = maxs >= 5 ? 2 : (maxs == 4 ? 1 : 0);    /* made / draw / none */
+
+    int rmask = 0;
+    for (int i = 0; i < 5; i++) rmask |= 1 << card_rank(five[i]);
+    if (rmask & (1 << 14)) rmask |= 1 << 1;             /* ace plays low */
+    int straight = 0;
+    for (int lo = 1; lo <= 10 && !straight; lo++) {
+        int cnt = 0;
+        for (int r = lo; r < lo + 5; r++) if (rmask & (1 << r)) cnt++;
+        if (cnt >= 4) straight = 1;                     /* >=4 to a straight */
+    }
+    return (cat * 3 + flush) * 2 + straight;
+}
+
+/* Bucketed flop equity accumulators, indexed [field size][class][bucket]. Small
+ * enough (~64k cells) for per-thread copies + reduction, like stats_t. */
+typedef struct {
+    long long cnt[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+    long long win[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+    long long tie_scaled[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+} flop_stats_t;
+
 /* Shuffles needed so the rarest cell (a suited hand — 4 of the 1326 two-card
  * combos — at the smallest table) is sampled ~`target` times. Each 6-max game
  * is reused for every table size, and a 2-player game deals the fewest hands,
@@ -288,7 +335,8 @@ static long shuffles_for(long target) {
  */
 static void run_nested(long target, uint64_t seed_base,
                        const double equity[][MAX_PLAYERS + 1],
-                       stats_t *out_eq, fold_stats_t *out_fold) {
+                       stats_t *out_eq, fold_stats_t *out_fold,
+                       flop_stats_t *out_flopeq) {
     int block = 5 + 2 * MAX_PLAYERS;   /* 6-max game: 5 board + 12 hole */
     int gps = 52 / block;
     long units = shuffles_for(target);
@@ -296,11 +344,13 @@ static void run_nested(long target, uint64_t seed_base,
         if (out_eq) memset(&out_eq[k], 0, sizeof(out_eq[k]));
         if (out_fold) memset(&out_fold[k], 0, sizeof(out_fold[k]));
     }
+    if (out_flopeq) memset(out_flopeq, 0, sizeof(*out_flopeq));
 
     #pragma omp parallel
     {
         stats_t *le = out_eq ? calloc(MAX_PLAYERS + 1, sizeof(stats_t)) : NULL;
         fold_stats_t *lf = out_fold ? calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t)) : NULL;
+        flop_stats_t *lfe = out_flopeq ? calloc(1, sizeof(flop_stats_t)) : NULL;
         #pragma omp for schedule(dynamic, 256)
         for (long u = 0; u < units; u++) {
             rng_t rng;
@@ -316,13 +366,15 @@ static void run_nested(long target, uint64_t seed_base,
                 int base = g * block;
                 int hand[7];
                 for (int i = 0; i < 5; i++) hand[2 + i] = deck[base + i]; /* shared board */
-                int score[MAX_PLAYERS], cls[MAX_PLAYERS];
+                int flop[3] = { deck[base], deck[base + 1], deck[base + 2] };
+                int score[MAX_PLAYERS], cls[MAX_PLAYERS], bkt[MAX_PLAYERS];
                 for (int p = 0; p < MAX_PLAYERS; p++) {
                     int a = deck[base + 5 + 2 * p];
                     int b = deck[base + 5 + 2 * p + 1];
                     hand[0] = a; hand[1] = b;
                     score[p] = evaluate(hand, 7); /* ranked once, reused below */
                     cls[p] = classify(a, b);
+                    bkt[p] = lfe ? flop_bucket(a, b, flop) : 0;
                 }
                 /* Reuse the same six ranked hands as a nested k-player game. */
                 for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++) {
@@ -339,6 +391,23 @@ static void run_nested(long target, uint64_t seed_base,
                             if (score[p] == mx) {
                                 if (tc == 1) le[k].win[c]++;
                                 else le[k].tie_scaled[c] += TIE_SCALE / tc;
+                            }
+                        }
+                    }
+                    if (lfe) {
+                        /* Raw flop equity per (class, texture bucket, field=k):
+                         * all k players go to showdown, keyed by each player's
+                         * flop bucket. Drives post-flop fold decisions later. */
+                        int mx = -1, tc = 0;
+                        for (int p = 0; p < k; p++) {
+                            if (score[p] > mx) { mx = score[p]; tc = 1; }
+                            else if (score[p] == mx) tc++;
+                        }
+                        for (int p = 0; p < k; p++) {
+                            lfe->cnt[k][cls[p]][bkt[p]]++;
+                            if (score[p] == mx) {
+                                if (tc == 1) lfe->win[k][cls[p]][bkt[p]]++;
+                                else lfe->tie_scaled[k][cls[p]][bkt[p]] += TIE_SCALE / tc;
                             }
                         }
                     }
@@ -362,22 +431,122 @@ static void run_nested(long target, uint64_t seed_base,
             }
         }
         #pragma omp critical
-        for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
-            for (int c = 0; c < NUM_HANDS; c++) {
-                if (le) {
-                    out_eq[k].cnt[c] += le[k].cnt[c];
-                    out_eq[k].win[c] += le[k].win[c];
-                    out_eq[k].tie_scaled[c] += le[k].tie_scaled[c];
-                    for (int j = 0; j < 9; j++) out_eq[k].cat[c][j] += le[k].cat[c][j];
+        {
+            for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
+                for (int c = 0; c < NUM_HANDS; c++) {
+                    if (le) {
+                        out_eq[k].cnt[c] += le[k].cnt[c];
+                        out_eq[k].win[c] += le[k].win[c];
+                        out_eq[k].tie_scaled[c] += le[k].tie_scaled[c];
+                        for (int j = 0; j < 9; j++) out_eq[k].cat[c][j] += le[k].cat[c][j];
+                    }
+                    if (lf) {
+                        out_fold[k].cnt[c] += lf[k].cnt[c];
+                        out_fold[k].win[c] += lf[k].win[c];
+                        out_fold[k].tie_scaled[c] += lf[k].tie_scaled[c];
+                    }
                 }
-                if (lf) {
-                    out_fold[k].cnt[c] += lf[k].cnt[c];
-                    out_fold[k].win[c] += lf[k].win[c];
-                    out_fold[k].tie_scaled[c] += lf[k].tie_scaled[c];
-                }
-            }
+            if (lfe)
+                for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
+                    for (int c = 0; c < NUM_HANDS; c++)
+                        for (int b = 0; b < NUM_BUCKETS; b++) {
+                            out_flopeq->cnt[k][c][b] += lfe->cnt[k][c][b];
+                            out_flopeq->win[k][c][b] += lfe->win[k][c][b];
+                            out_flopeq->tie_scaled[k][c][b] += lfe->tie_scaled[k][c][b];
+                        }
+        }
         free(le);
         free(lf);
+        free(lfe);
+    }
+}
+
+/*
+ * Pass 4 — aggregate post-flop fold, keyed (class, N), averaged over all flops.
+ * Two fold rounds: pre-flop (a player folds when `equity[class][N] < 1/N`),
+ * leaving `remaining`; then post-flop (a pre-flop survivor folds when its
+ * bucketed flop equity `flopeq[remaining][class][bucket] < 1/remaining`). The
+ * turn+river run out among the post-flop survivors; each pre-flop survivor's
+ * win/split is recorded (a post-flop folder simply loses). Reuses the 6-max
+ * nested deals; fold sets are recomputed per N (break-even `1/N` differs by N).
+ */
+static void run_postfold(long target, uint64_t seed_base,
+                         const double equity[][MAX_PLAYERS + 1],
+                         const double flopeq[][NUM_HANDS][NUM_BUCKETS],
+                         fold_stats_t *out) {
+    int block = 5 + 2 * MAX_PLAYERS;
+    int gps = 52 / block;
+    long units = shuffles_for(target);
+    for (int k = 0; k <= MAX_PLAYERS; k++) memset(&out[k], 0, sizeof(out[k]));
+
+    #pragma omp parallel
+    {
+        fold_stats_t *lo = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+        #pragma omp for schedule(dynamic, 256)
+        for (long u = 0; u < units; u++) {
+            rng_t rng;
+            rng_seed(&rng, seed_base + (uint64_t)u);
+            int deck[52];
+            for (int c = 0; c < 52; c++) deck[c] = c;
+            int need = gps * block;
+            for (int i = 0; i < need; i++) {
+                int j = i + rng_bounded(&rng, 52 - i);
+                int tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
+            }
+            for (int g = 0; g < gps; g++) {
+                int base = g * block;
+                int hand[7];
+                for (int i = 0; i < 5; i++) hand[2 + i] = deck[base + i];
+                int flop[3] = { deck[base], deck[base + 1], deck[base + 2] };
+                int score[MAX_PLAYERS], cls[MAX_PLAYERS], bkt[MAX_PLAYERS];
+                for (int p = 0; p < MAX_PLAYERS; p++) {
+                    int a = deck[base + 5 + 2 * p];
+                    int b = deck[base + 5 + 2 * p + 1];
+                    hand[0] = a; hand[1] = b;
+                    score[p] = evaluate(hand, 7);
+                    cls[p] = classify(a, b);
+                    bkt[p] = flop_bucket(a, b, flop);
+                }
+                for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++) {
+                    double preth = 1.0 / k;
+                    int stay[MAX_PLAYERS], remaining = 0;
+                    for (int p = 0; p < k; p++) {
+                        stay[p] = equity[cls[p]][k] >= preth;
+                        if (stay[p]) remaining++;
+                    }
+                    double postth = remaining > 0 ? 1.0 / remaining : 1.0;
+                    int in[MAX_PLAYERS];
+                    for (int p = 0; p < k; p++) {
+                        if (!stay[p]) { in[p] = 0; continue; }
+                        in[p] = !(remaining >= 2 &&
+                                  flopeq[remaining][cls[p]][bkt[p]] < postth);
+                    }
+                    int mx = -1, tc = 0; /* showdown among post-flop survivors */
+                    for (int p = 0; p < k; p++) if (in[p]) {
+                        if (score[p] > mx) { mx = score[p]; tc = 1; }
+                        else if (score[p] == mx) tc++;
+                    }
+                    for (int p = 0; p < k; p++) {
+                        if (!stay[p]) continue;      /* pre-flop folders: no row */
+                        int c = cls[p];
+                        lo[k].cnt[c]++;
+                        if (!in[p]) continue;        /* folded on the flop -> loses */
+                        if (score[p] == mx) {
+                            if (tc == 1) lo[k].win[c]++;
+                            else lo[k].tie_scaled[c] += TIE_SCALE / tc;
+                        }
+                    }
+                }
+            }
+        }
+        #pragma omp critical
+        for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
+            for (int c = 0; c < NUM_HANDS; c++) {
+                out[k].cnt[c] += lo[k].cnt[c];
+                out[k].win[c] += lo[k].win[c];
+                out[k].tie_scaled[c] += lo[k].tie_scaled[c];
+            }
+        free(lo);
     }
 }
 
@@ -480,13 +649,16 @@ int main(int argc, char **argv) {
     static double L[NUM_HANDS][MAX_PLAYERS + 1];
     static double WF[NUM_HANDS][MAX_PLAYERS + 1];
     static double TF[NUM_HANDS][MAX_PLAYERS + 1];
+    static double PFW[NUM_HANDS][MAX_PLAYERS + 1]; /* post-flop fold win */
+    static double PFT[NUM_HANDS][MAX_PLAYERS + 1]; /* post-flop fold tie (split) */
     static double CAT[NUM_HANDS][MAX_PLAYERS + 1][9];
     static double equity[NUM_HANDS][MAX_PLAYERS + 1]; /* win + tie, per class */
 
     /* Pass 1: standard equity + category distribution for every table size in a
      * single set of 6-max shuffles (each reused as nested 2..6-player games). */
     stats_t *se = calloc(MAX_PLAYERS + 1, sizeof(stats_t));
-    run_nested(target, 0x1ULL << 40, NULL, se, NULL);
+    flop_stats_t *fe = calloc(1, sizeof(flop_stats_t)); /* bucketed flop equity, same deals */
+    run_nested(target, 0x1ULL << 40, NULL, se, NULL, fe);
     long long min_samples = LLONG_MAX;
     int min_class = 0, min_players = 0;
     for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
@@ -516,7 +688,7 @@ int main(int argc, char **argv) {
 
     /* Pass 2: fold-adjusted equity, deciding folds from the pass-1 table. */
     fold_stats_t *sf = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
-    run_nested(target, 0x2ULL << 40, equity, NULL, sf);
+    run_nested(target, 0x2ULL << 40, equity, NULL, sf, NULL);
     for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
         for (int c = 0; c < NUM_HANDS; c++) {
             double cnt = (double)sf[players].cnt[c];
@@ -524,16 +696,48 @@ int main(int argc, char **argv) {
             TF[c][players] = (double)sf[players].tie_scaled[c] / (TIE_SCALE * cnt);
         }
     }
+
+    /* Bucketed flop equity (RAM-only intermediate) for the post-flop fold
+     * decisions, from the same pass-1 deals. Common buckets get ~0.4×target
+     * samples (dense); empty/rare buckets fall back to the class's equity. */
+    static double flopeq[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+    long long min_bucket = LLONG_MAX;
+    for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++)
+        for (int c = 0; c < NUM_HANDS; c++)
+            for (int b = 0; b < NUM_BUCKETS; b++) {
+                long long n = fe->cnt[players][c][b];
+                flopeq[players][c][b] = n
+                    ? (fe->win[players][c][b] +
+                       (double)fe->tie_scaled[players][c][b] / TIE_SCALE) / n
+                    : equity[c][players];
+                if (n > 0 && n < min_bucket) min_bucket = n;
+            }
+    free(fe);
+    fprintf(stderr, "flop buckets: min %lld samples over non-empty (hand,bucket,players) cells\n",
+            min_bucket);
+
+    /* Pass 4: aggregate post-flop fold, using pass-1 equity + pass-3 flop equity. */
+    fold_stats_t *pf = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+    run_postfold(target, 0x4ULL << 40, equity,
+                 (const double (*)[NUM_HANDS][NUM_BUCKETS])flopeq, pf);
+    for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++)
+        for (int c = 0; c < NUM_HANDS; c++) {
+            double cnt = (double)pf[players].cnt[c];
+            PFW[c][players] = cnt > 0 ? pf[players].win[c] / cnt : 0.0;
+            PFT[c][players] = cnt > 0 ? (double)pf[players].tie_scaled[c] / (TIE_SCALE * cnt) : 0.0;
+        }
+    free(pf);
     free(se);
     free(sf);
 
     /* Print class-major, matching build_hands()/classify() order. */
     for (int c = 0; c < nh; c++) {
         for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
-            printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t{",
+            printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t{",
                    hands[c].label, players,
                    W[c][players], T[c][players], L[c][players],
-                   WF[c][players], TF[c][players]);
+                   WF[c][players], TF[c][players],
+                   PFW[c][players], PFT[c][players]);
             for (int j = 0; j < 9; j++)
                 printf("%s\"%s\":%.5f", j ? "," : "", CATEGORY_NAMES[j], CAT[c][players][j]);
             printf("}\n");
