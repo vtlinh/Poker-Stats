@@ -1,4 +1,4 @@
-# Poker Odds ♠️
+# Poker Pro ♠️
 
 A native Android app that tells you your **chance of winning** a Texas Hold'em
 hand before the flop. Pick your two hole cards and how many players are at the
