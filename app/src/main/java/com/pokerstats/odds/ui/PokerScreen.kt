@@ -565,7 +565,7 @@ private fun Header() {
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            "Win big, play like a PRO!",
+            "Win big, go home rich!",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
