@@ -20,10 +20,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -52,11 +54,14 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -140,9 +145,7 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
     ) {
         Header()
 
-        SectionCard(title = "Total Players") {
-            PlayerSlider(state.totalPlayers, viewModel::setPlayers)
-        }
+        PlayersCard(state.totalPlayers, viewModel::setPlayers)
 
         SectionCard(title = "Your Hand") {
             Row(
@@ -187,9 +190,7 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        SectionCard(title = "Total Players") {
-            PlayerSlider(state.totalPlayers, viewModel::setPlayers)
-        }
+        PlayersCard(state.totalPlayers, viewModel::setPlayers)
 
         if (state.table.isEmpty()) {
             Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
@@ -210,7 +211,6 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
                 } else {
                     "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})"
                 },
-                breakEven = breakEven,
                 values = state.table.associate {
                     it.handClass to
                         if (postFlop) it.postFoldCountingTiesPercent
@@ -219,8 +219,8 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
                 control = { FoldModeToggle(postFlop) { postFlop = it } },
             )
             Text(
-                "Yellow = break-even ${"%.1f".format(breakEven)}%; greener is better, " +
-                    "redder is worse; black = fold",
+                "Win Probability: yellow = break-even ${"%.1f".format(breakEven)}%. " +
+                    "Fold grid: red→green by rank (median = yellow). Black = fold.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
@@ -390,30 +390,89 @@ private fun InfoPill(label: String) {
     }
 }
 
+/** Compact players card: title + count + info on one row, slider below. */
 @Composable
-private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
-    Column {
-        Text(
-            "$count",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-        )
-        Slider(
-            value = count.toFloat(),
-            onValueChange = { onChange(it.roundToInt()) },
-            valueRange = MIN_PLAYERS.toFloat()..MAX_PLAYERS.toFloat(),
-            steps = MAX_PLAYERS - MIN_PLAYERS - 1,
-        )
-        Text(
-            "Break-even ${"%.1f".format(100.0 / count)}% (1 in $count)",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-        )
+private fun PlayersCard(count: Int, onChange: (Int) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Total Players",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+                InfoTooltip(
+                    "Break-even ${"%.1f".format(100.0 / count)}% (1 in $count) — a hand needs " +
+                        "at least this much equity to be worth playing.",
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "$count",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Slider(
+                value = count.toFloat(),
+                onValueChange = { onChange(it.roundToInt()) },
+                valueRange = MIN_PLAYERS.toFloat()..MAX_PLAYERS.toFloat(),
+                steps = MAX_PLAYERS - MIN_PLAYERS - 1,
+            )
+        }
+    }
+}
+
+/** A small circular (?) badge that reveals `text` in a dismissable popup on tap. */
+@Composable
+private fun InfoTooltip(text: String) {
+    var open by remember { mutableStateOf(false) }
+    val yOffset = with(LocalDensity.current) { 22.dp.roundToPx() }
+    Box {
+        Box(
+            Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f))
+                .clickable { open = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "?",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+        }
+        if (open) {
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, yOffset),
+                onDismissRequest = { open = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.widthIn(max = 240.dp),
+                ) {
+                    Text(
+                        text,
+                        modifier = Modifier
+                            .clickable { open = false }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -524,26 +583,27 @@ private fun ResultPanel(result: PreflopEquity) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
-        Column(Modifier.padding(20.dp)) {
+        Column(Modifier.padding(16.dp)) {
             SplitMetric(
                 title = "Win Probability",
-                caption = null,
+                info = "Your chance to win at showdown against random hands, " +
+                    "with ties counted as wins.",
                 winPercent = result.winCountingTiesPercent,
             )
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(12.dp))
             FoldSplit(result)
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(12.dp))
             PostFoldSplit(result)
 
             if (result.categoryFrequency.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
                 Spacer(Modifier.height(16.dp))
+                Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+                Spacer(Modifier.height(12.dp))
                 Text(
                     "Your hand makes",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
@@ -556,24 +616,23 @@ private fun ResultPanel(result: PreflopEquity) {
     }
 }
 
-/** A titled win/lose split: a header row, the outcome bar, and the legend. */
+/** A titled win/lose split: a compact header row (title + optional info) + bar. */
 @Composable
-private fun SplitMetric(title: String, caption: String?, winPercent: Double) {
+private fun SplitMetric(title: String, info: String?, winPercent: Double) {
     val losePercent = (100.0 - winPercent).coerceIn(0.0, 100.0)
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        if (caption != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                caption,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
             )
+            if (info != null) {
+                Spacer(Modifier.width(6.dp))
+                InfoTooltip(info)
+            }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(6.dp))
         OutcomeBar(winPercent, losePercent)
     }
 }
@@ -587,36 +646,42 @@ private fun SplitMetric(title: String, caption: String?, winPercent: Double) {
 private fun FoldSplit(result: PreflopEquity) {
     val heroFolds = result.winCountingTies < 1.0 / result.players
     if (heroFolds) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Pre-flop fold",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    "below break-even (1 in ${result.players}) — fold this hand",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "Fold",
-                style = MaterialTheme.typography.headlineSmall,
-                color = LoseRed,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+        FoldedRow(
+            "Pre-flop fold",
+            "This hand is below break-even (1 in ${result.players}), so you fold it pre-flop.",
+        )
     } else {
         SplitMetric(
             title = "Pre-flop fold",
-            caption = "if weak hands fold below break-even (1 in ${result.players})",
+            info = "Chance to win if every hand below break-even (1 in ${result.players}) " +
+                "folds pre-flop, thinning the field before the flop.",
             winPercent = result.winFoldCountingTiesPercent,
+        )
+    }
+}
+
+/** Compact "<name> — Fold" row for a hand the hero folds. */
+@Composable
+private fun FoldedRow(title: String, info: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(6.dp))
+            InfoTooltip(info)
+        }
+        Text(
+            "Fold",
+            style = MaterialTheme.typography.titleMedium,
+            color = LoseRed,
+            fontWeight = FontWeight.Bold,
         )
     }
 }
@@ -631,35 +696,15 @@ private fun FoldSplit(result: PreflopEquity) {
 private fun PostFoldSplit(result: PreflopEquity) {
     val heroFolds = result.winCountingTies < 1.0 / result.players
     if (heroFolds) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Post-flop fold",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    "below break-even (1 in ${result.players}) — fold this hand",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "Fold",
-                style = MaterialTheme.typography.headlineSmall,
-                color = LoseRed,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+        FoldedRow(
+            "Post-flop fold",
+            "This hand folds pre-flop (below 1 in ${result.players}), so it never sees a flop.",
+        )
     } else {
         SplitMetric(
             title = "Post-flop fold",
-            caption = "if weak hands also fold weak flops (averaged over all flops)",
+            info = "Pre-flop survivors also fold weak flops (below 1 in remaining), " +
+                "and you fold yours too — averaged over every flop.",
             winPercent = result.postFoldCountingTiesPercent,
         )
     }
@@ -749,20 +794,24 @@ private fun CategoryRow(category: HandCategory, percent: Double) {
 // --- hand matrix (Table tab) ----------------------------------------------
 
 /**
- * A 13×13 grid of the 169 starting hands for one probability. Cells are colored
- * relative to the break-even line (`breakEven`, a percent): yellow at break-even,
- * easing toward green above and red below — the further from break-even, the more
- * vivid and darker. A folded hand (0%) is black. Row/column headers run A→2,
- * suited hands above the diagonal, offsuit below (the standard poker matrix).
+ * A 13×13 grid of the 169 starting hands for one probability. Two color modes:
+ * when `breakEven` is given (Win Probability), cells use the break-even-anchored
+ * eased-HSL ramp (yellow at break-even, green above, red below); otherwise (the
+ * fold grids, whose survivors all sit well above break-even) cells use a red→green
+ * ramp keyed on each hand's **rank** among the non-folded values (median = yellow),
+ * so color spreads evenly even when the values cluster. A folded (0%) hand is
+ * black. Row/column headers run A→2, suited above the diagonal, offsuit below.
  */
 @Composable
 private fun HandMatrix(
     title: String,
     caption: String,
-    breakEven: Double,
     values: Map<String, Double>,
+    breakEven: Double? = null,
     control: (@Composable () -> Unit)? = null,
 ) {
+    val sorted = values.values.filter { it > 0.01 }.sorted()
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -817,11 +866,23 @@ private fun HandMatrix(
                         }
                         val pct = values[handClass] ?: 0.0
                         val folded = pct <= 0.01
-                        // Signed distance from break-even, log2(equity/breakEven)
-                        // clamped to [-1, 1]: 0 = break-even, +1 = double it, -1 = half.
-                        val t = if (folded) -1f
-                        else log2(pct / breakEven).toFloat().coerceIn(-1f, 1f)
-                        MatrixCell(handClass, pct, t, folded)
+                        val bg = when {
+                            folded -> Color.Black
+                            // Win Probability: break-even-anchored (yellow = 1/N).
+                            breakEven != null ->
+                                oddsColor(log2(pct / breakEven).toFloat().coerceIn(-1f, 1f))
+                            // Fold grids: red→green by rank (median = yellow).
+                            else -> {
+                                val rank = sorted.count { it < pct }
+                                val t = if (sorted.size > 1) {
+                                    rank.toFloat() / (sorted.size - 1)
+                                } else {
+                                    0.5f
+                                }
+                                rampColor(t)
+                            }
+                        }
+                        MatrixCell(handClass, pct, bg, folded)
                     }
                 }
             }
@@ -830,8 +891,7 @@ private fun HandMatrix(
 }
 
 @Composable
-private fun RowScope.MatrixCell(label: String, pct: Double, t: Float, folded: Boolean) {
-    val bg = if (folded) Color.Black else oddsColor(t)
+private fun RowScope.MatrixCell(label: String, pct: Double, bg: Color, folded: Boolean) {
     val fg = if (folded) Color(0xFF6A6A6A) else Color.White
     Box(
         modifier = Modifier
@@ -872,6 +932,10 @@ private fun oddsColor(t: Float): Color {
     val hue = 60f + 60f * sign(t) * m
     return Color.hsl(hue, (62f + 22f * m) / 100f, (38f - 15f * m) / 100f)
 }
+
+/** Uniform red→green ramp for `t` in [0, 1]: 0 red, 0.5 yellow-green, 1 green. */
+private fun rampColor(t: Float): Color =
+    Color.hsl(120f * t.coerceIn(0f, 1f), 0.68f, 0.40f)
 
 // --- sticky footer tabs ----------------------------------------------------
 
