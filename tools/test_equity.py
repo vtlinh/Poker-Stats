@@ -34,6 +34,8 @@ def _generate(binary, trials):
             "win": float(p[2]), "tie": float(p[3]), "lose": float(p[4]),
             "win_fold": float(p[5]), "tie_fold": float(p[6]),
             "post_fold_win": float(p[7]), "post_fold_tie": float(p[8]),
+            "turn_fold_win": float(p[9]), "turn_fold_tie": float(p[10]),
+            "river_fold_win": float(p[11]), "river_fold_tie": float(p[12]),
         }
     return data
 
@@ -116,15 +118,18 @@ def test_weak_hero_folds_to_zero(equity_binary):
 
 
 def test_post_fold_bounds_and_preflop_folders(equity_binary):
-    # Post-flop fold is only defined for hands the hero plays pre-flop: a hand
-    # that folds pre-flop (win_fold + tie_fold == 0) never reaches the flop, so
-    # its post-flop-fold equity is 0 too. Everything else stays in [0, 1].
+    # The fold stats are only defined for hands the hero plays pre-flop: a hand
+    # that folds pre-flop (win_fold + tie_fold == 0) never reaches a later street,
+    # so its post-flop/turn/river fold equity is 0 too. Everything else in [0, 1].
     data = _generate(equity_binary, 40_000)
+    streets = ("post_fold", "turn_fold", "river_fold")
     for (hand, players), r in data.items():
-        post = r["post_fold_win"] + r["post_fold_tie"]
-        assert 0.0 <= post <= 1.0, f"{hand} {players}: post-fold {post} out of range"
-        if r["win_fold"] + r["tie_fold"] == 0.0:
-            assert post == 0.0, f"{hand} {players}: pre-flop folder has post-fold {post}"
+        preflop_folder = r["win_fold"] + r["tie_fold"] == 0.0
+        for st in streets:
+            v = r[f"{st}_win"] + r[f"{st}_tie"]
+            assert 0.0 <= v <= 1.0, f"{hand} {players}: {st} {v} out of range"
+            if preflop_folder:
+                assert v == 0.0, f"{hand} {players}: pre-flop folder has {st} {v}"
 
 
 def test_post_fold_beats_preflop_fold_for_premium_hands(equity_binary):
@@ -136,8 +141,9 @@ def test_post_fold_beats_preflop_fold_for_premium_hands(equity_binary):
         for players in (2, 3, 4, 5, 6):
             r = data[(hand, players)]
             pre = r["win_fold"] + r["tie_fold"]
-            post = r["post_fold_win"] + r["post_fold_tie"]
-            assert post >= pre - 0.02, f"{hand} {players}: post {post} < pre {pre}"
+            for st in ("post_fold", "turn_fold", "river_fold"):
+                v = r[f"{st}_win"] + r[f"{st}_tie"]
+                assert v >= pre - 0.02, f"{hand} {players}: {st} {v} < pre {pre}"
 
 
 def _min_samples(binary, target):

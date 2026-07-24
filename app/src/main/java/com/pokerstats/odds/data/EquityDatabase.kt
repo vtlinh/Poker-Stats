@@ -18,6 +18,10 @@ data class PreflopEquity(
     val tieFold: Double,
     val postFoldWin: Double,
     val postFoldTie: Double,
+    val turnFoldWin: Double,
+    val turnFoldTie: Double,
+    val riverFoldWin: Double,
+    val riverFoldTie: Double,
     val categoryFrequency: Map<HandCategory, Double>,
 ) {
     /** Win probability with ties counted as wins. */
@@ -45,6 +49,18 @@ data class PreflopEquity(
      */
     val postFoldCountingTies: Double get() = postFoldWin + postFoldTie
     val postFoldCountingTiesPercent: Double get() = postFoldCountingTies * 100.0
+
+    /**
+     * Post-turn fold: the fold cascade continues through the turn (survivors
+     * fold turns whose bucketed equity is below the shrunk break-even), the hero
+     * included, averaged over every board.
+     */
+    val turnFoldCountingTies: Double get() = turnFoldWin + turnFoldTie
+    val turnFoldCountingTiesPercent: Double get() = turnFoldCountingTies * 100.0
+
+    /** Post-river fold: the fold cascade continues all the way through the river. */
+    val riverFoldCountingTies: Double get() = riverFoldWin + riverFoldTie
+    val riverFoldCountingTiesPercent: Double get() = riverFoldCountingTies * 100.0
 }
 
 /**
@@ -102,7 +118,8 @@ class EquityDatabase(private val appContext: Context) {
 
     fun lookup(handClass: String, players: Int): PreflopEquity? {
         val cursor = database().rawQuery(
-            "SELECT win, tie, lose, win_fold, tie_fold, post_fold_win, post_fold_tie, categories " +
+            "SELECT win, tie, lose, win_fold, tie_fold, post_fold_win, post_fold_tie, " +
+                "turn_fold_win, turn_fold_tie, river_fold_win, river_fold_tie, categories " +
                 "FROM equity WHERE hand_class = ? AND players = ? LIMIT 1",
             arrayOf(handClass, players.toString()),
         )
@@ -118,7 +135,11 @@ class EquityDatabase(private val appContext: Context) {
                 tieFold = c.getDouble(4),
                 postFoldWin = c.getDouble(5),
                 postFoldTie = c.getDouble(6),
-                categoryFrequency = parseCategories(c.getString(7)),
+                turnFoldWin = c.getDouble(7),
+                turnFoldTie = c.getDouble(8),
+                riverFoldWin = c.getDouble(9),
+                riverFoldTie = c.getDouble(10),
+                categoryFrequency = parseCategories(c.getString(11)),
             )
         }
     }
@@ -130,7 +151,8 @@ class EquityDatabase(private val appContext: Context) {
      */
     fun lookupAll(players: Int): List<PreflopEquity> {
         val cursor = database().rawQuery(
-            "SELECT hand_class, win, tie, lose, win_fold, tie_fold, post_fold_win, post_fold_tie " +
+            "SELECT hand_class, win, tie, lose, win_fold, tie_fold, post_fold_win, post_fold_tie, " +
+                "turn_fold_win, turn_fold_tie, river_fold_win, river_fold_tie " +
                 "FROM equity WHERE players = ?",
             arrayOf(players.toString()),
         )
@@ -148,6 +170,10 @@ class EquityDatabase(private val appContext: Context) {
                         tieFold = c.getDouble(5),
                         postFoldWin = c.getDouble(6),
                         postFoldTie = c.getDouble(7),
+                        turnFoldWin = c.getDouble(8),
+                        turnFoldTie = c.getDouble(9),
+                        riverFoldWin = c.getDouble(10),
+                        riverFoldTie = c.getDouble(11),
                         categoryFrequency = emptyMap(),
                     ),
                 )
@@ -167,7 +193,7 @@ class EquityDatabase(private val appContext: Context) {
 
     companion object {
         private const val ASSET_NAME = "poker_equity.db"
-        private const val EXPECTED_VERSION = 3
+        private const val EXPECTED_VERSION = 4
 
         /** Canonical starting-hand key, e.g. "AA", "AKs", "AKo", "72o". */
         fun canonicalKey(a: Card, b: Card): String {

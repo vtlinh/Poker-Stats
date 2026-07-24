@@ -278,19 +278,26 @@ typedef struct {
  * a straight draw is present.  cat(0..8) x flush(0/1/2) x straight(0/1) = 54.
  */
 #define NUM_BUCKETS (9 * 3 * 2)
+#define NUM_STREETS 3   /* flop (3 board cards), turn (4), river (5) */
 
-static int flop_bucket(int c1, int c2, const int flop[3]) {
-    int five[5] = { c1, c2, flop[0], flop[1], flop[2] };
-    int cat = evaluate(five, 5) >> CATEGORY_SHIFT;      /* 0..8 made hand */
+/* Texture bucket for a hand on a partial/complete board: made 5-card category ×
+ * flush potential (none/draw/made) × straight potential (none/draw), over the
+ * two hole cards plus `nboard` board cards (nboard = 3 flop, 4 turn, 5 river). */
+static int board_bucket(int c1, int c2, const int *board, int nboard) {
+    int cards[7];
+    cards[0] = c1; cards[1] = c2;
+    for (int i = 0; i < nboard; i++) cards[2 + i] = board[i];
+    int n = 2 + nboard;
+    int cat = evaluate(cards, n) >> CATEGORY_SHIFT;     /* 0..8 made hand */
 
     int sc[4] = {0};
-    for (int i = 0; i < 5; i++) sc[card_suit(five[i])]++;
+    for (int i = 0; i < n; i++) sc[card_suit(cards[i])]++;
     int maxs = 0;
     for (int s = 0; s < 4; s++) if (sc[s] > maxs) maxs = sc[s];
     int flush = maxs >= 5 ? 2 : (maxs == 4 ? 1 : 0);    /* made / draw / none */
 
     int rmask = 0;
-    for (int i = 0; i < 5; i++) rmask |= 1 << card_rank(five[i]);
+    for (int i = 0; i < n; i++) rmask |= 1 << card_rank(cards[i]);
     if (rmask & (1 << 14)) rmask |= 1 << 1;             /* ace plays low */
     int straight = 0;
     for (int lo = 1; lo <= 10 && !straight; lo++) {
@@ -301,13 +308,13 @@ static int flop_bucket(int c1, int c2, const int flop[3]) {
     return (cat * 3 + flush) * 2 + straight;
 }
 
-/* Bucketed flop equity accumulators, indexed [field size][class][bucket]. Small
- * enough (~64k cells) for per-thread copies + reduction, like stats_t. */
+/* Bucketed street-equity accumulators, indexed [street][field size][class][bucket].
+ * Street 0 = flop, 1 = turn, 2 = river. Per-thread copies + reduction, like stats_t. */
 typedef struct {
-    long long cnt[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
-    long long win[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
-    long long tie_scaled[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
-} flop_stats_t;
+    long long cnt[NUM_STREETS][MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+    long long win[NUM_STREETS][MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+    long long tie_scaled[NUM_STREETS][MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+} street_stats_t;
 
 /* Shuffles needed so the rarest cell (a suited hand — 4 of the 1326 two-card
  * combos — at the smallest table) is sampled ~`target` times. Each 6-max game
@@ -336,7 +343,7 @@ static long shuffles_for(long target) {
 static void run_nested(long target, uint64_t seed_base,
                        const double equity[][MAX_PLAYERS + 1],
                        stats_t *out_eq, fold_stats_t *out_fold,
-                       flop_stats_t *out_flopeq) {
+                       street_stats_t *out_street) {
     int block = 5 + 2 * MAX_PLAYERS;   /* 6-max game: 5 board + 12 hole */
     int gps = 52 / block;
     long units = shuffles_for(target);
@@ -344,13 +351,13 @@ static void run_nested(long target, uint64_t seed_base,
         if (out_eq) memset(&out_eq[k], 0, sizeof(out_eq[k]));
         if (out_fold) memset(&out_fold[k], 0, sizeof(out_fold[k]));
     }
-    if (out_flopeq) memset(out_flopeq, 0, sizeof(*out_flopeq));
+    if (out_street) memset(out_street, 0, sizeof(*out_street));
 
     #pragma omp parallel
     {
         stats_t *le = out_eq ? calloc(MAX_PLAYERS + 1, sizeof(stats_t)) : NULL;
         fold_stats_t *lf = out_fold ? calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t)) : NULL;
-        flop_stats_t *lfe = out_flopeq ? calloc(1, sizeof(flop_stats_t)) : NULL;
+        street_stats_t *lse = out_street ? calloc(1, sizeof(street_stats_t)) : NULL;
         #pragma omp for schedule(dynamic, 256)
         for (long u = 0; u < units; u++) {
             rng_t rng;
@@ -366,15 +373,20 @@ static void run_nested(long target, uint64_t seed_base,
                 int base = g * block;
                 int hand[7];
                 for (int i = 0; i < 5; i++) hand[2 + i] = deck[base + i]; /* shared board */
-                int flop[3] = { deck[base], deck[base + 1], deck[base + 2] };
-                int score[MAX_PLAYERS], cls[MAX_PLAYERS], bkt[MAX_PLAYERS];
+                const int *board = deck + base;   /* 5 board cards */
+                int score[MAX_PLAYERS], cls[MAX_PLAYERS];
+                int bkt[NUM_STREETS][MAX_PLAYERS];
                 for (int p = 0; p < MAX_PLAYERS; p++) {
                     int a = deck[base + 5 + 2 * p];
                     int b = deck[base + 5 + 2 * p + 1];
                     hand[0] = a; hand[1] = b;
                     score[p] = evaluate(hand, 7); /* ranked once, reused below */
                     cls[p] = classify(a, b);
-                    bkt[p] = lfe ? flop_bucket(a, b, flop) : 0;
+                    if (lse) {
+                        bkt[0][p] = board_bucket(a, b, board, 3); /* flop */
+                        bkt[1][p] = board_bucket(a, b, board, 4); /* turn */
+                        bkt[2][p] = board_bucket(a, b, board, 5); /* river */
+                    }
                 }
                 /* Reuse the same six ranked hands as a nested k-player game. */
                 for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++) {
@@ -394,22 +406,25 @@ static void run_nested(long target, uint64_t seed_base,
                             }
                         }
                     }
-                    if (lfe) {
-                        /* Raw flop equity per (class, texture bucket, field=k):
-                         * all k players go to showdown, keyed by each player's
-                         * flop bucket. Drives post-flop fold decisions later. */
+                    if (lse) {
+                        /* Raw street equity per (street, class, texture bucket,
+                         * field=k): all k players go to showdown; the final result
+                         * is keyed by each player's bucket on each street. Drives
+                         * the per-street fold decisions later. */
                         int mx = -1, tc = 0;
                         for (int p = 0; p < k; p++) {
                             if (score[p] > mx) { mx = score[p]; tc = 1; }
                             else if (score[p] == mx) tc++;
                         }
-                        for (int p = 0; p < k; p++) {
-                            lfe->cnt[k][cls[p]][bkt[p]]++;
-                            if (score[p] == mx) {
-                                if (tc == 1) lfe->win[k][cls[p]][bkt[p]]++;
-                                else lfe->tie_scaled[k][cls[p]][bkt[p]] += TIE_SCALE / tc;
+                        for (int p = 0; p < k; p++)
+                            for (int s = 0; s < NUM_STREETS; s++) {
+                                int b = bkt[s][p];
+                                lse->cnt[s][k][cls[p]][b]++;
+                                if (score[p] == mx) {
+                                    if (tc == 1) lse->win[s][k][cls[p]][b]++;
+                                    else lse->tie_scaled[s][k][cls[p]][b] += TIE_SCALE / tc;
+                                }
                             }
-                        }
                     }
                     if (lf) {
                         double thresh = 1.0 / k;
@@ -446,42 +461,54 @@ static void run_nested(long target, uint64_t seed_base,
                         out_fold[k].tie_scaled[c] += lf[k].tie_scaled[c];
                     }
                 }
-            if (lfe)
-                for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
-                    for (int c = 0; c < NUM_HANDS; c++)
-                        for (int b = 0; b < NUM_BUCKETS; b++) {
-                            out_flopeq->cnt[k][c][b] += lfe->cnt[k][c][b];
-                            out_flopeq->win[k][c][b] += lfe->win[k][c][b];
-                            out_flopeq->tie_scaled[k][c][b] += lfe->tie_scaled[k][c][b];
-                        }
+            if (lse)
+                for (int s = 0; s < NUM_STREETS; s++)
+                    for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
+                        for (int c = 0; c < NUM_HANDS; c++)
+                            for (int b = 0; b < NUM_BUCKETS; b++) {
+                                out_street->cnt[s][k][c][b] += lse->cnt[s][k][c][b];
+                                out_street->win[s][k][c][b] += lse->win[s][k][c][b];
+                                out_street->tie_scaled[s][k][c][b] += lse->tie_scaled[s][k][c][b];
+                            }
         }
         free(le);
         free(lf);
-        free(lfe);
+        free(lse);
     }
 }
 
 /*
- * Pass 4 — aggregate post-flop fold, keyed (class, N), averaged over all flops.
- * Two fold rounds: pre-flop (a player folds when `equity[class][N] < 1/N`),
- * leaving `remaining`; then post-flop (a pre-flop survivor folds when its
- * bucketed flop equity `flopeq[remaining][class][bucket] < 1/remaining`). The
- * turn+river run out among the post-flop survivors; each pre-flop survivor's
- * win/split is recorded (a post-flop folder simply loses). Reuses the 6-max
- * nested deals; fold sets are recomputed per N (break-even `1/N` differs by N).
+ * Pass 4 — aggregate post-flop / post-turn / post-river fold, keyed (class, N),
+ * averaged over all boards. A cascade of fold rounds thins the field: pre-flop
+ * (fold when `equity[class][N] < 1/N`) → `rem0`; flop (fold when bucketed flop
+ * equity `< 1/rem0`) → `rem1`; turn (`< 1/rem1`) → `rem2`; river (`< 1/rem2`).
+ * Three stats are recorded per pre-flop survivor: `outF` stops folding after the
+ * flop (showdown among flop survivors), `outT` after the turn, `outR` after the
+ * river — the hero folds its own weak streets too, so a hand that folds on a
+ * street simply loses that (and every later) stat. Reuses the 6-max nested
+ * deals; fold sets are recomputed per N (break-even `1/N` differs by N).
  */
-static void run_postfold(long target, uint64_t seed_base,
-                         const double equity[][MAX_PLAYERS + 1],
-                         const double flopeq[][NUM_HANDS][NUM_BUCKETS],
-                         fold_stats_t *out) {
+static void run_streetfold(long target, uint64_t seed_base,
+                           const double equity[][MAX_PLAYERS + 1],
+                           const double flopeq[][NUM_HANDS][NUM_BUCKETS],
+                           const double turneq[][NUM_HANDS][NUM_BUCKETS],
+                           const double rivereq[][NUM_HANDS][NUM_BUCKETS],
+                           fold_stats_t *outF, fold_stats_t *outT,
+                           fold_stats_t *outR) {
     int block = 5 + 2 * MAX_PLAYERS;
     int gps = 52 / block;
     long units = shuffles_for(target);
-    for (int k = 0; k <= MAX_PLAYERS; k++) memset(&out[k], 0, sizeof(out[k]));
+    for (int k = 0; k <= MAX_PLAYERS; k++) {
+        memset(&outF[k], 0, sizeof(outF[k]));
+        memset(&outT[k], 0, sizeof(outT[k]));
+        memset(&outR[k], 0, sizeof(outR[k]));
+    }
 
     #pragma omp parallel
     {
-        fold_stats_t *lo = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+        fold_stats_t *lF = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+        fold_stats_t *lT = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+        fold_stats_t *lR = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
         #pragma omp for schedule(dynamic, 256)
         for (long u = 0; u < units; u++) {
             rng_t rng;
@@ -497,43 +524,81 @@ static void run_postfold(long target, uint64_t seed_base,
                 int base = g * block;
                 int hand[7];
                 for (int i = 0; i < 5; i++) hand[2 + i] = deck[base + i];
-                int flop[3] = { deck[base], deck[base + 1], deck[base + 2] };
-                int score[MAX_PLAYERS], cls[MAX_PLAYERS], bkt[MAX_PLAYERS];
+                const int *board = deck + base;
+                int score[MAX_PLAYERS], cls[MAX_PLAYERS];
+                int bkt[NUM_STREETS][MAX_PLAYERS];
                 for (int p = 0; p < MAX_PLAYERS; p++) {
                     int a = deck[base + 5 + 2 * p];
                     int b = deck[base + 5 + 2 * p + 1];
                     hand[0] = a; hand[1] = b;
                     score[p] = evaluate(hand, 7);
                     cls[p] = classify(a, b);
-                    bkt[p] = flop_bucket(a, b, flop);
+                    bkt[0][p] = board_bucket(a, b, board, 3);
+                    bkt[1][p] = board_bucket(a, b, board, 4);
+                    bkt[2][p] = board_bucket(a, b, board, 5);
                 }
                 for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++) {
+                    /* Fold cascade. inS[street] survives through that street. */
+                    int stay[MAX_PLAYERS], inF[MAX_PLAYERS];
+                    int inT[MAX_PLAYERS], inR[MAX_PLAYERS];
+                    int rem0 = 0;
                     double preth = 1.0 / k;
-                    int stay[MAX_PLAYERS], remaining = 0;
                     for (int p = 0; p < k; p++) {
                         stay[p] = equity[cls[p]][k] >= preth;
-                        if (stay[p]) remaining++;
+                        if (stay[p]) rem0++;
                     }
-                    double postth = remaining > 0 ? 1.0 / remaining : 1.0;
-                    int in[MAX_PLAYERS];
+                    double thF = rem0 > 0 ? 1.0 / rem0 : 1.0;
+                    int rem1 = 0;
                     for (int p = 0; p < k; p++) {
-                        if (!stay[p]) { in[p] = 0; continue; }
-                        in[p] = !(remaining >= 2 &&
-                                  flopeq[remaining][cls[p]][bkt[p]] < postth);
+                        inF[p] = stay[p] && !(rem0 >= 2 &&
+                                 flopeq[rem0][cls[p]][bkt[0][p]] < thF);
+                        if (inF[p]) rem1++;
                     }
-                    int mx = -1, tc = 0; /* showdown among post-flop survivors */
-                    for (int p = 0; p < k; p++) if (in[p]) {
-                        if (score[p] > mx) { mx = score[p]; tc = 1; }
-                        else if (score[p] == mx) tc++;
+                    double thT = rem1 > 0 ? 1.0 / rem1 : 1.0;
+                    int rem2 = 0;
+                    for (int p = 0; p < k; p++) {
+                        inT[p] = inF[p] && !(rem1 >= 2 &&
+                                 turneq[rem1][cls[p]][bkt[1][p]] < thT);
+                        if (inT[p]) rem2++;
+                    }
+                    double thR = rem2 > 0 ? 1.0 / rem2 : 1.0;
+                    for (int p = 0; p < k; p++) {
+                        inR[p] = inT[p] && !(rem2 >= 2 &&
+                                 rivereq[rem2][cls[p]][bkt[2][p]] < thR);
+                    }
+                    /* Best hand among each street's survivor set (for splits). */
+                    int mxF = -1, tcF = 0, mxT = -1, tcT = 0, mxR = -1, tcR = 0;
+                    for (int p = 0; p < k; p++) {
+                        if (inF[p]) {
+                            if (score[p] > mxF) { mxF = score[p]; tcF = 1; }
+                            else if (score[p] == mxF) tcF++;
+                        }
+                        if (inT[p]) {
+                            if (score[p] > mxT) { mxT = score[p]; tcT = 1; }
+                            else if (score[p] == mxT) tcT++;
+                        }
+                        if (inR[p]) {
+                            if (score[p] > mxR) { mxR = score[p]; tcR = 1; }
+                            else if (score[p] == mxR) tcR++;
+                        }
                     }
                     for (int p = 0; p < k; p++) {
-                        if (!stay[p]) continue;      /* pre-flop folders: no row */
+                        if (!stay[p]) continue;    /* pre-flop folders: no row */
                         int c = cls[p];
-                        lo[k].cnt[c]++;
-                        if (!in[p]) continue;        /* folded on the flop -> loses */
-                        if (score[p] == mx) {
-                            if (tc == 1) lo[k].win[c]++;
-                            else lo[k].tie_scaled[c] += TIE_SCALE / tc;
+                        lF[k].cnt[c]++;
+                        lT[k].cnt[c]++;
+                        lR[k].cnt[c]++;
+                        if (inF[p] && score[p] == mxF) {
+                            if (tcF == 1) lF[k].win[c]++;
+                            else lF[k].tie_scaled[c] += TIE_SCALE / tcF;
+                        }
+                        if (inT[p] && score[p] == mxT) {
+                            if (tcT == 1) lT[k].win[c]++;
+                            else lT[k].tie_scaled[c] += TIE_SCALE / tcT;
+                        }
+                        if (inR[p] && score[p] == mxR) {
+                            if (tcR == 1) lR[k].win[c]++;
+                            else lR[k].tie_scaled[c] += TIE_SCALE / tcR;
                         }
                     }
                 }
@@ -542,11 +607,19 @@ static void run_postfold(long target, uint64_t seed_base,
         #pragma omp critical
         for (int k = MIN_PLAYERS; k <= MAX_PLAYERS; k++)
             for (int c = 0; c < NUM_HANDS; c++) {
-                out[k].cnt[c] += lo[k].cnt[c];
-                out[k].win[c] += lo[k].win[c];
-                out[k].tie_scaled[c] += lo[k].tie_scaled[c];
+                outF[k].cnt[c] += lF[k].cnt[c];
+                outF[k].win[c] += lF[k].win[c];
+                outF[k].tie_scaled[c] += lF[k].tie_scaled[c];
+                outT[k].cnt[c] += lT[k].cnt[c];
+                outT[k].win[c] += lT[k].win[c];
+                outT[k].tie_scaled[c] += lT[k].tie_scaled[c];
+                outR[k].cnt[c] += lR[k].cnt[c];
+                outR[k].win[c] += lR[k].win[c];
+                outR[k].tie_scaled[c] += lR[k].tie_scaled[c];
             }
-        free(lo);
+        free(lF);
+        free(lT);
+        free(lR);
     }
 }
 
@@ -651,14 +724,18 @@ int main(int argc, char **argv) {
     static double TF[NUM_HANDS][MAX_PLAYERS + 1];
     static double PFW[NUM_HANDS][MAX_PLAYERS + 1]; /* post-flop fold win */
     static double PFT[NUM_HANDS][MAX_PLAYERS + 1]; /* post-flop fold tie (split) */
+    static double TUW[NUM_HANDS][MAX_PLAYERS + 1]; /* post-turn fold win */
+    static double TUT[NUM_HANDS][MAX_PLAYERS + 1]; /* post-turn fold tie (split) */
+    static double RVW[NUM_HANDS][MAX_PLAYERS + 1]; /* post-river fold win */
+    static double RVT[NUM_HANDS][MAX_PLAYERS + 1]; /* post-river fold tie (split) */
     static double CAT[NUM_HANDS][MAX_PLAYERS + 1][9];
     static double equity[NUM_HANDS][MAX_PLAYERS + 1]; /* win + tie, per class */
 
     /* Pass 1: standard equity + category distribution for every table size in a
      * single set of 6-max shuffles (each reused as nested 2..6-player games). */
     stats_t *se = calloc(MAX_PLAYERS + 1, sizeof(stats_t));
-    flop_stats_t *fe = calloc(1, sizeof(flop_stats_t)); /* bucketed flop equity, same deals */
-    run_nested(target, 0x1ULL << 40, NULL, se, NULL, fe);
+    street_stats_t *sst = calloc(1, sizeof(street_stats_t)); /* bucketed street equity, same deals */
+    run_nested(target, 0x1ULL << 40, NULL, se, NULL, sst);
     long long min_samples = LLONG_MAX;
     int min_class = 0, min_players = 0;
     for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
@@ -697,47 +774,67 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Bucketed flop equity (RAM-only intermediate) for the post-flop fold
-     * decisions, from the same pass-1 deals. Common buckets get ~0.4×target
-     * samples (dense); empty/rare buckets fall back to the class's equity. */
-    static double flopeq[MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
-    long long min_bucket = LLONG_MAX;
-    for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++)
-        for (int c = 0; c < NUM_HANDS; c++)
-            for (int b = 0; b < NUM_BUCKETS; b++) {
-                long long n = fe->cnt[players][c][b];
-                flopeq[players][c][b] = n
-                    ? (fe->win[players][c][b] +
-                       (double)fe->tie_scaled[players][c][b] / TIE_SCALE) / n
-                    : equity[c][players];
-                if (n > 0 && n < min_bucket) min_bucket = n;
-            }
-    free(fe);
-    fprintf(stderr, "flop buckets: min %lld samples over non-empty (hand,bucket,players) cells\n",
-            min_bucket);
+    /* Bucketed street equity (RAM-only intermediate) for the per-street fold
+     * decisions, from the same pass-1 deals — one table per street (flop/turn/
+     * river). Common buckets get ~0.4×target samples (dense); empty/rare buckets
+     * fall back to the class's overall equity. */
+    static double streeteq[NUM_STREETS][MAX_PLAYERS + 1][NUM_HANDS][NUM_BUCKETS];
+    long long min_bucket[NUM_STREETS] = { LLONG_MAX, LLONG_MAX, LLONG_MAX };
+    for (int s = 0; s < NUM_STREETS; s++)
+        for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++)
+            for (int c = 0; c < NUM_HANDS; c++)
+                for (int b = 0; b < NUM_BUCKETS; b++) {
+                    long long n = sst->cnt[s][players][c][b];
+                    streeteq[s][players][c][b] = n
+                        ? (sst->win[s][players][c][b] +
+                           (double)sst->tie_scaled[s][players][c][b] / TIE_SCALE) / n
+                        : equity[c][players];
+                    if (n > 0 && n < min_bucket[s]) min_bucket[s] = n;
+                }
+    free(sst);
+    fprintf(stderr, "street buckets: min samples over non-empty cells — "
+            "flop %lld, turn %lld, river %lld\n",
+            min_bucket[0], min_bucket[1], min_bucket[2]);
 
-    /* Pass 4: aggregate post-flop fold, using pass-1 equity + pass-3 flop equity. */
+    /* Pass 4: aggregate post-flop / post-turn / post-river fold, using pass-1
+     * equity + the bucketed per-street equity tables. */
     fold_stats_t *pf = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
-    run_postfold(target, 0x4ULL << 40, equity,
-                 (const double (*)[NUM_HANDS][NUM_BUCKETS])flopeq, pf);
+    fold_stats_t *tu = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+    fold_stats_t *rv = calloc(MAX_PLAYERS + 1, sizeof(fold_stats_t));
+    run_streetfold(target, 0x4ULL << 40, equity,
+                   (const double (*)[NUM_HANDS][NUM_BUCKETS])streeteq[0],
+                   (const double (*)[NUM_HANDS][NUM_BUCKETS])streeteq[1],
+                   (const double (*)[NUM_HANDS][NUM_BUCKETS])streeteq[2],
+                   pf, tu, rv);
     for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++)
         for (int c = 0; c < NUM_HANDS; c++) {
-            double cnt = (double)pf[players].cnt[c];
-            PFW[c][players] = cnt > 0 ? pf[players].win[c] / cnt : 0.0;
-            PFT[c][players] = cnt > 0 ? (double)pf[players].tie_scaled[c] / (TIE_SCALE * cnt) : 0.0;
+            double cf = (double)pf[players].cnt[c];
+            PFW[c][players] = cf > 0 ? pf[players].win[c] / cf : 0.0;
+            PFT[c][players] = cf > 0 ? (double)pf[players].tie_scaled[c] / (TIE_SCALE * cf) : 0.0;
+            double ct = (double)tu[players].cnt[c];
+            TUW[c][players] = ct > 0 ? tu[players].win[c] / ct : 0.0;
+            TUT[c][players] = ct > 0 ? (double)tu[players].tie_scaled[c] / (TIE_SCALE * ct) : 0.0;
+            double cr = (double)rv[players].cnt[c];
+            RVW[c][players] = cr > 0 ? rv[players].win[c] / cr : 0.0;
+            RVT[c][players] = cr > 0 ? (double)rv[players].tie_scaled[c] / (TIE_SCALE * cr) : 0.0;
         }
     free(pf);
+    free(tu);
+    free(rv);
     free(se);
     free(sf);
 
     /* Print class-major, matching build_hands()/classify() order. */
     for (int c = 0; c < nh; c++) {
         for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
-            printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t{",
+            printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f"
+                   "\t%.5f\t%.5f\t%.5f\t%.5f\t{",
                    hands[c].label, players,
                    W[c][players], T[c][players], L[c][players],
                    WF[c][players], TF[c][players],
-                   PFW[c][players], PFT[c][players]);
+                   PFW[c][players], PFT[c][players],
+                   TUW[c][players], TUT[c][players],
+                   RVW[c][players], RVT[c][players]);
             for (int j = 0; j < 9; j++)
                 printf("%s\"%s\":%.5f", j ? "," : "", CATEGORY_NAMES[j], CAT[c][players][j]);
             printf("}\n");
