@@ -68,7 +68,10 @@ import com.pokerstats.odds.engine.Rank
 import com.pokerstats.odds.ui.theme.LoseRed
 import com.pokerstats.odds.ui.theme.WinGreen
 import kotlin.math.abs
+import kotlin.math.log2
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sign
 
 // Deep, near-black slate-green with a subtle top glow.
 private val ScreenBackground = Brush.verticalGradient(
@@ -174,6 +177,9 @@ private fun HandsTab(state: PokerUiState, viewModel: PokerViewModel) {
  */
 @Composable
 private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
+    // The fold grid shows pre-flop by default; the toggle switches it to post-flop.
+    var postFlop by rememberSaveable { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -190,30 +196,53 @@ private fun TableTab(state: PokerUiState, viewModel: PokerViewModel) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         } else {
-            val breakEven = 1.0 / state.totalPlayers
+            val breakEven = 100.0 / state.totalPlayers
             HandMatrix(
                 title = "Win Probability",
                 caption = "Chance to win (ties split), all players to showdown",
+                breakEven = breakEven,
                 values = state.table.associate { it.handClass to it.winCountingTiesPercent },
             )
             HandMatrix(
-                title = "Pre-flop fold",
-                caption = "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})",
-                values = state.table.associate { it.handClass to it.winFoldCountingTiesPercent },
-            )
-            HandMatrix(
-                title = "Post-flop fold",
-                caption = "Weak hands also fold weak flops (below 1 in ${state.totalPlayers})",
-                values = state.table.associate { it.handClass to it.postFoldCountingTiesPercent },
+                title = if (postFlop) "Post-flop fold" else "Pre-flop fold",
+                caption = if (postFlop) {
+                    "Weak hands also fold weak flops (below 1 in ${state.totalPlayers})"
+                } else {
+                    "Weak hands fold pre-flop (below 1 in ${state.totalPlayers})"
+                },
+                breakEven = breakEven,
+                values = state.table.associate {
+                    it.handClass to
+                        if (postFlop) it.postFoldCountingTiesPercent
+                        else it.winFoldCountingTiesPercent
+                },
+                control = { FoldModeToggle(postFlop) { postFlop = it } },
             )
             Text(
-                "Break-even ${"%.1f".format(breakEven * 100)}% — black cells are folds",
+                "Yellow = break-even ${"%.1f".format(breakEven)}%; greener is better, " +
+                    "redder is worse; black = fold",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
         }
 
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** Switch flipping the fold grid between Pre-flop (off) and Post-flop (on). */
+@Composable
+private fun FoldModeToggle(postFlop: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SwitchLabel("Pre-flop", active = !postFlop)
+        Spacer(Modifier.width(14.dp))
+        Switch(checked = postFlop, onCheckedChange = onChange)
+        Spacer(Modifier.width(14.dp))
+        SwitchLabel("Post-flop", active = postFlop)
     }
 }
 
@@ -720,19 +749,20 @@ private fun CategoryRow(category: HandCategory, percent: Double) {
 // --- hand matrix (Table tab) ----------------------------------------------
 
 /**
- * A 13×13 grid of the 169 starting hands for one probability. Cells are
- * color-graded from red (weakest playable) to green (strongest) relative to the
- * min/max of *this* grid, so each metric uses its full range; a folded hand
- * (0%) is black. Row/column headers run A→2, suited hands above the diagonal,
- * offsuit below (the standard poker matrix).
+ * A 13×13 grid of the 169 starting hands for one probability. Cells are colored
+ * relative to the break-even line (`breakEven`, a percent): yellow at break-even,
+ * easing toward green above and red below — the further from break-even, the more
+ * vivid and darker. A folded hand (0%) is black. Row/column headers run A→2,
+ * suited hands above the diagonal, offsuit below (the standard poker matrix).
  */
 @Composable
-private fun HandMatrix(title: String, caption: String, values: Map<String, Double>) {
-    val playing = values.values.filter { it > 0.01 }
-    val lo = playing.minOrNull() ?: 0.0
-    val hi = playing.maxOrNull() ?: 1.0
-    val span = (hi - lo).takeIf { it > 1e-6 } ?: 1.0
-
+private fun HandMatrix(
+    title: String,
+    caption: String,
+    breakEven: Double,
+    values: Map<String, Double>,
+    control: (@Composable () -> Unit)? = null,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -749,6 +779,10 @@ private fun HandMatrix(title: String, caption: String, values: Map<String, Doubl
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
+            if (control != null) {
+                Spacer(Modifier.height(12.dp))
+                control()
+            }
             Spacer(Modifier.height(10.dp))
 
             val headerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
@@ -783,7 +817,10 @@ private fun HandMatrix(title: String, caption: String, values: Map<String, Doubl
                         }
                         val pct = values[handClass] ?: 0.0
                         val folded = pct <= 0.01
-                        val t = ((pct - lo) / span).toFloat().coerceIn(0f, 1f)
+                        // Signed distance from break-even, log2(equity/breakEven)
+                        // clamped to [-1, 1]: 0 = break-even, +1 = double it, -1 = half.
+                        val t = if (folded) -1f
+                        else log2(pct / breakEven).toFloat().coerceIn(-1f, 1f)
                         MatrixCell(handClass, pct, t, folded)
                     }
                 }
@@ -794,7 +831,7 @@ private fun HandMatrix(title: String, caption: String, values: Map<String, Doubl
 
 @Composable
 private fun RowScope.MatrixCell(label: String, pct: Double, t: Float, folded: Boolean) {
-    val bg = if (folded) Color.Black else gradeColor(t)
+    val bg = if (folded) Color.Black else oddsColor(t)
     val fg = if (folded) Color(0xFF6A6A6A) else Color.White
     Box(
         modifier = Modifier
@@ -824,31 +861,16 @@ private fun RowScope.MatrixCell(label: String, pct: Double, t: Float, folded: Bo
 }
 
 /**
- * Map a normalized strength `t` (0 weakest, 1 strongest) onto the felt-style
- * red→olive→green ramp used by the grid.
+ * Break-even-anchored ramp (after group_iou): yellow (hue 60) at break-even,
+ * easing toward green (120) above and red (0) below. `t` is the signed, clamped
+ * distance from break-even in [-1, 1]; the eased magnitude `|t|^0.6` also drives
+ * saturation up and lightness down, so cells far from break-even read as more
+ * vivid and darker.
  */
-private fun gradeColor(t: Float): Color {
-    val stops = listOf(
-        0.00f to Color(0xFF6E1E12), // dark red
-        0.25f to Color(0xFF8A3A16), // red-brown
-        0.50f to Color(0xFF8C7A1E), // olive
-        0.75f to Color(0xFF5E8A22), // yellow-green
-        1.00f to Color(0xFF2E8B34), // green
-    )
-    val x = t.coerceIn(0f, 1f)
-    for (i in 0 until stops.size - 1) {
-        val (t0, c0) = stops[i]
-        val (t1, c1) = stops[i + 1]
-        if (x <= t1) {
-            val f = if (t1 > t0) (x - t0) / (t1 - t0) else 0f
-            return Color(
-                red = c0.red + (c1.red - c0.red) * f,
-                green = c0.green + (c1.green - c0.green) * f,
-                blue = c0.blue + (c1.blue - c0.blue) * f,
-            )
-        }
-    }
-    return stops.last().second
+private fun oddsColor(t: Float): Color {
+    val m = abs(t).pow(0.6f)
+    val hue = 60f + 60f * sign(t) * m
+    return Color.hsl(hue, (62f + 22f * m) / 100f, (38f - 15f * m) / 100f)
 }
 
 // --- sticky footer tabs ----------------------------------------------------
