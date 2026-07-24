@@ -31,6 +31,7 @@ def _generate(binary, trials):
         p = line.split("\t")
         data[(p[0], int(p[1]))] = {
             "win": float(p[2]), "tie": float(p[3]), "lose": float(p[4]),
+            "win_fold": float(p[5]), "tie_fold": float(p[6]),
         }
     return data
 
@@ -72,3 +73,27 @@ def test_more_opponents_lowers_equity(equity_binary):
     heads_up = data[("AA", 2)]["win"] + data[("AA", 2)]["tie"]
     six_way = data[("AA", 6)]["win"] + data[("AA", 6)]["tie"]
     assert heads_up > six_way
+
+
+def test_fold_equity_at_least_standard(equity_binary):
+    # Opponents folding weak hands can only help the hero, so the fold-adjusted
+    # win rate is >= the plain win rate for every cell (allow for MC noise).
+    data = _generate(equity_binary, 40_000)
+    for (hand, players), r in data.items():
+        std = r["win"] + r["tie"]
+        fold = r["win_fold"] + r["tie_fold"]
+        assert fold >= std - 0.02, f"{hand} {players}: fold {fold} < std {std}"
+        assert 0.0 <= fold <= 1.0
+
+
+def test_fold_boosts_multiway_more_than_headsup(equity_binary):
+    # Folding matters more as the table grows: heads-up there is only one
+    # opponent to fold, six-handed there are five, so AA gains more equity from
+    # the fold assumption six-handed than heads-up.
+    data = _generate(equity_binary, 60_000)
+
+    def gain(hand, players):
+        r = data[(hand, players)]
+        return (r["win_fold"] + r["tie_fold"]) - (r["win"] + r["tie"])
+
+    assert gain("AA", 6) > gain("AA", 2)

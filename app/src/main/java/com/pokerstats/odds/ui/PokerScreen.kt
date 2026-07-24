@@ -438,6 +438,9 @@ private fun ResultPanel(result: PreflopEquity) {
                 color = WinGreen,
             )
 
+            Spacer(Modifier.height(12.dp))
+            FoldMetric(result.winFoldCountingTiesPercent, result.players)
+
             Spacer(Modifier.height(16.dp))
             OutcomeBar(result.winCountingTiesPercent, result.losePercent)
 
@@ -463,6 +466,40 @@ private fun ResultPanel(result: PreflopEquity) {
                     .forEach { (category, freq) -> CategoryRow(category, freq * 100.0) }
             }
         }
+    }
+}
+
+@Composable
+private fun FoldMetric(percent: Double, players: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Pre-flop fold",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "if weak hands fold below break-even (1 in $players)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            "%.1f%%".format(percent),
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 

@@ -6,9 +6,12 @@
  * and the hero's final-hand-category distribution, and prints one TSV row per
  * (hand, players) to stdout:
  *
- *     hand<TAB>players<TAB>win<TAB>tie<TAB>lose<TAB>{category json}
+ *     hand<TAB>players<TAB>win<TAB>tie<TAB>lose<TAB>win_fold<TAB>tie_fold<TAB>{category json}
  *
- * `build_equity_db.py` packs that TSV into the SQLite asset the app ships.
+ * `win_fold`/`tie_fold` are the fold-adjusted equity: the hero's win/tie rate
+ * once every opponent whose own N-player equity is below break-even (1/N) folds
+ * pre-flop. `build_equity_db.py` packs that TSV into the SQLite asset the app
+ * ships.
  *
  * The 7-card evaluator works directly from rank/suit counts (no 21-subset
  * enumeration); `--selftest` cross-checks it against a brute-force best-of-21
@@ -192,6 +195,38 @@ static int build_hands(hand_t *out) {
     return n;
 }
 
+/*
+ * Map any two hole cards to their canonical hand index (0..168), matching the
+ * order build_hands() emits (pair, then suited, then offsuit). Used to look up
+ * an opponent's precomputed equity when deciding whether they fold.
+ */
+static int g_idx_pair[15];          /* [rank]      -> index */
+static int g_idx_suited[15][15];    /* [hi][lo]    -> index */
+static int g_idx_offsuit[15][15];   /* [hi][lo]    -> index */
+
+static void build_class_index(void) {
+    int n = 0;
+    for (int i = 0; i < 13; i++) {
+        for (int j = i; j < 13; j++) {
+            int hi = RANK_VALS[i], lo = RANK_VALS[j];
+            if (i == j) {
+                g_idx_pair[hi] = n++;
+            } else {
+                g_idx_suited[hi][lo] = n++;
+                g_idx_offsuit[hi][lo] = n++;
+            }
+        }
+    }
+}
+
+static inline int classify(int a, int b) {
+    int ra = card_rank(a), rb = card_rank(b);
+    int hi = ra > rb ? ra : rb;
+    int lo = ra > rb ? rb : ra;
+    if (ra == rb) return g_idx_pair[hi];
+    return (card_suit(a) == card_suit(b)) ? g_idx_suited[hi][lo] : g_idx_offsuit[hi][lo];
+}
+
 /* --- one Monte-Carlo cell ----------------------------------------------- */
 typedef struct {
     double win, tie, lose;
@@ -245,6 +280,62 @@ static result_t simulate(int c1, int c2, int players, long trials, uint64_t seed
     r.win = wins / n; r.tie = ties / n; r.lose = losses / n;
     for (int c = 0; c < 9; c++) r.cat[c] = cat_counts[c] / n;
     return r;
+}
+
+/*
+ * Fold-adjusted equity: assume every opponent folds pre-flop when their own
+ * N-player equity (win + tie) is below the break-even threshold 1/N, and only
+ * the rest go to showdown. `equity[class][players]` is the standard preflop
+ * equity table computed by the first pass. Hero never folds; if every opponent
+ * folds the hero wins uncontested. Ties count as wins for the hero, mirroring
+ * the app's headline win-probability metric.
+ */
+static void simulate_fold(int c1, int c2, int players, long trials, uint64_t seed,
+                          const double equity[][MAX_PLAYERS + 1],
+                          double *out_win, double *out_tie) {
+    int opponents = players - 1;
+    int deck[52], deck_n = 0;
+    for (int c = 0; c < 52; c++) if (c != c1 && c != c2) deck[deck_n++] = c;
+
+    int need = 5 + 2 * opponents;
+    double thresh = 1.0 / players;
+    long wins = 0, ties = 0;
+
+    rng_t rng;
+    rng_seed(&rng, seed);
+
+    int hero[7];
+    hero[0] = c1; hero[1] = c2;
+    int opp[7];
+
+    for (long t = 0; t < trials; t++) {
+        for (int i = 0; i < need; i++) {
+            int j = i + rng_bounded(&rng, deck_n - i);
+            int tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
+        }
+        for (int i = 0; i < 5; i++) { hero[2 + i] = deck[i]; opp[2 + i] = deck[i]; }
+
+        int hero_score = evaluate(hero, 7);
+
+        int best_opp = -1;
+        int idx = 5;
+        for (int o = 0; o < opponents; o++) {
+            int a = deck[idx++];
+            int b = deck[idx++];
+            if (equity[classify(a, b)][players] < thresh) continue; /* opponent folds */
+            opp[0] = a; opp[1] = b;
+            int s = evaluate(opp, 7);
+            if (s > best_opp) best_opp = s;
+        }
+
+        if (best_opp < 0) wins++;                 /* everyone folded */
+        else if (hero_score > best_opp) wins++;
+        else if (hero_score == best_opp) ties++;
+    }
+
+    double n = (double)trials;
+    *out_win = wins / n;
+    *out_tie = ties / n;
 }
 
 /* --- self test ----------------------------------------------------------- */
@@ -336,8 +427,10 @@ int main(int argc, char **argv) {
 
     hand_t hands[NUM_HANDS];
     int nh = build_hands(hands);
+    build_class_index();
 
-    int total = nh * (MAX_PLAYERS - MIN_PLAYERS + 1);
+    int nP = MAX_PLAYERS - MIN_PLAYERS + 1;
+    int total = nh * nP;
     /* flat task list so OpenMP can split evenly */
     typedef struct { int hand_idx, players; } task_t;
     task_t *tasks = malloc(sizeof(task_t) * total);
@@ -348,16 +441,34 @@ int main(int argc, char **argv) {
 
     result_t *results = malloc(sizeof(result_t) * total);
 
+    /* Pass 1: standard equity (all players go to showdown). */
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < total; i++) {
         hand_t h = hands[tasks[i].hand_idx];
         results[i] = simulate(h.c1, h.c2, tasks[i].players, trials, (uint64_t)(i + 1));
     }
 
+    /* Standard equity (win + tie) indexed by [hand class][players], used by
+     * pass 2 to decide which opponents fold. Class index == hand index. */
+    static double equity[NUM_HANDS][MAX_PLAYERS + 1];
+    for (int i = 0; i < total; i++)
+        equity[tasks[i].hand_idx][tasks[i].players] = results[i].win + results[i].tie;
+
+    /* Pass 2: fold-adjusted equity (opponents below 1/N fold pre-flop). */
+    double *win_fold = malloc(sizeof(double) * total);
+    double *tie_fold = malloc(sizeof(double) * total);
+    #pragma omp parallel for schedule(dynamic)
+    for (int i = 0; i < total; i++) {
+        hand_t h = hands[tasks[i].hand_idx];
+        simulate_fold(h.c1, h.c2, tasks[i].players, trials, (uint64_t)(i + 1 + total),
+                      equity, &win_fold[i], &tie_fold[i]);
+    }
+
     for (int i = 0; i < total; i++) {
         hand_t h = hands[tasks[i].hand_idx];
         result_t r = results[i];
-        printf("%s\t%d\t%.5f\t%.5f\t%.5f\t{", h.label, tasks[i].players, r.win, r.tie, r.lose);
+        printf("%s\t%d\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t{",
+               h.label, tasks[i].players, r.win, r.tie, r.lose, win_fold[i], tie_fold[i]);
         for (int c = 0; c < 9; c++)
             printf("%s\"%s\":%.5f", c ? "," : "", CATEGORY_NAMES[c], r.cat[c]);
         printf("}\n");
@@ -365,5 +476,7 @@ int main(int argc, char **argv) {
 
     free(tasks);
     free(results);
+    free(win_fold);
+    free(tie_fold);
     return 0;
 }
