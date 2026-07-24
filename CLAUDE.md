@@ -57,8 +57,9 @@ tools/                                 # C + Python generator for poker_equity.d
     dip below pre-flop for drawing hands, since the hero folds the flops it
     misses).
 - The UI has two tabs in a sticky footer: **Hands** (the single-hand
-  calculator) and **Table** — 13×13 starting-hand grids: **Win Probability**
-  and a fold grid with a **Pre-flop/Post-flop** switch (defaults to pre-flop).
+  calculator) and **Table** — a single 13×13 starting-hand grid that fills the
+  screen (no scrolling), with a **mode slider** picking the metric: **Default**
+  (Win Probability), **Pre-flop fold**, **Post-flop fold** (`tableModes()`).
   Two color modes: **Win Probability** is break-even-anchored (yellow at 1/N,
   easing `|t|^0.6` on `t = log2(equity/breakEven)` clamped to ±1, green above /
   red below); the **fold grids** — whose survivors all sit well above break-even
