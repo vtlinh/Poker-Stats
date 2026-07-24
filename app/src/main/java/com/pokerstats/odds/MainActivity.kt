@@ -12,7 +12,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            PokerStatsTheme {
+            PokerStatsTheme(darkTheme = true) {
                 PokerScreen()
             }
         }

@@ -1,24 +1,25 @@
 package com.pokerstats.odds.ui
 
-import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,23 +27,24 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,24 +52,28 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pokerstats.odds.data.PreflopEquity
-import com.pokerstats.odds.engine.Card as PlayingCard
 import com.pokerstats.odds.engine.HandCategory
-import com.pokerstats.odds.engine.Suit
-import com.pokerstats.odds.ui.theme.CardWhite
-import com.pokerstats.odds.ui.theme.ChipRed
-import com.pokerstats.odds.ui.theme.InkBlack
+import com.pokerstats.odds.engine.Rank
 import com.pokerstats.odds.ui.theme.LoseRed
 import com.pokerstats.odds.ui.theme.WinGreen
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+// Background matching the download page: dark slate-green with a top glow.
+private val ScreenBackground = Brush.verticalGradient(
+    0f to Color(0xFF24402E),
+    0.42f to Color(0xFF141C18),
+    1f to Color(0xFF141C18),
+)
 
 @Composable
 fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var showPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { viewModel.onStart() }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Box(modifier = Modifier.fillMaxSize().background(ScreenBackground)) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (state.update.showBanner) {
                 UpdateBanner(
@@ -85,26 +91,38 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
             ) {
                 Header()
 
-                SectionCard(title = "Your Hand") {
-                    CardRow(
-                        cards = state.hole,
-                        onAdd = { showPicker = true },
-                        onRemove = viewModel::removeCard,
-                    )
-                }
-
                 SectionCard(title = "Total Players") {
-                    PlayerStepper(state.totalPlayers, viewModel::setPlayers)
+                    PlayerSlider(state.totalPlayers, viewModel::setPlayers)
                 }
 
-                if (!state.heroComplete) {
+                SectionCard(title = "Your Hand") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RankWheel(state.rank1, viewModel::setRank1, Modifier.width(78.dp))
+                        Spacer(Modifier.width(28.dp))
+                        RankWheel(state.rank2, viewModel::setRank2, Modifier.width(78.dp))
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+
+                    if (state.isPair) {
+                        InfoPill("Pocket pair")
+                    } else {
+                        SuitedToggle(suited = state.suited, onChange = viewModel::setSuited)
+                    }
+
+                    Spacer(Modifier.height(14.dp))
                     Text(
-                        "Pick your two hole cards to see your odds.",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                        state.handClass,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
                     )
-                } else {
-                    OutlinedButton(onClick = viewModel::reset) { Text("Clear hand") }
                 }
 
                 state.result?.let { ResultPanel(it) }
@@ -113,18 +131,181 @@ fun PokerScreen(viewModel: PokerViewModel = viewModel()) {
             }
         }
     }
+}
 
-    if (showPicker) {
-        CardPickerDialog(
-            used = state.usedCards,
-            onPick = { card ->
-                viewModel.addCard(card)
-                if (state.hole.size + 1 >= 2) showPicker = false
-            },
-            onDismiss = { showPicker = false },
+// --- infinite rank wheel ---------------------------------------------------
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RankWheel(
+    selected: Rank,
+    onSelected: (Rank) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val ranks = remember { Rank.entries.sortedByDescending { it.value } } // A..2
+    val n = ranks.size
+    val itemHeight = 48.dp
+
+    // Start deep in a virtually-infinite list, aligned so `selected` is centered.
+    val start = remember {
+        val half = Int.MAX_VALUE / 2
+        half - (half % n) + ranks.indexOf(selected).coerceAtLeast(0)
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
+    val fling = rememberSnapFlingBehavior(lazyListState = listState)
+
+    fun rankAt(index: Int): Rank = ranks[((index % n) + n) % n]
+
+    val centerIndex by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val items = info.visibleItemsInfo
+            if (items.isEmpty()) {
+                start
+            } else {
+                val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                items.minByOrNull { abs((it.offset + it.size / 2f) - center) }!!.index
+            }
+        }
+    }
+
+    // Report the centered rank once the wheel settles.
+    LaunchedEffect(centerIndex, listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress) {
+            val r = rankAt(centerIndex)
+            if (r != selected) onSelected(r)
+        }
+    }
+
+    val surface = MaterialTheme.colorScheme.surface
+    Box(modifier = modifier.height(itemHeight * 3), contentAlignment = Alignment.Center) {
+        // Selection window highlight.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(itemHeight)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                    RoundedCornerShape(10.dp),
+                ),
+        )
+        LazyColumn(
+            state = listState,
+            flingBehavior = fling,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            contentPadding = PaddingValues(vertical = itemHeight),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            items(count = Int.MAX_VALUE) { index ->
+                val isCenter = index == centerIndex
+                Box(
+                    Modifier.height(itemHeight).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        rankAt(index).symbol,
+                        fontSize = if (isCenter) 32.sp else 20.sp,
+                        fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isCenter) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                        },
+                    )
+                }
+            }
+        }
+        // Top & bottom fades for the slot-machine look.
+        Box(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().height(itemHeight)
+                .background(Brush.verticalGradient(listOf(surface, surface.copy(alpha = 0f)))),
+        )
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(itemHeight)
+                .background(Brush.verticalGradient(listOf(surface.copy(alpha = 0f), surface))),
         )
     }
 }
+
+@Composable
+private fun SuitedToggle(suited: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        TogglePill("Suited", selected = suited) { onChange(true) }
+        Spacer(Modifier.width(10.dp))
+        TogglePill("Offsuit", selected = !suited) { onChange(false) }
+    }
+}
+
+@Composable
+private fun TogglePill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+    ) {
+        Text(label, color = fg, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun InfoPill(label: String) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                .padding(horizontal = 24.dp, vertical = 10.dp),
+        ) {
+            Text(
+                label,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerSlider(count: Int, onChange: (Int) -> Unit) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Players",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            )
+            Text(
+                "$count",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Slider(
+            value = count.toFloat(),
+            onValueChange = { onChange(it.roundToInt()) },
+            valueRange = MIN_PLAYERS.toFloat()..MAX_PLAYERS.toFloat(),
+            steps = MAX_PLAYERS - MIN_PLAYERS - 1,
+        )
+    }
+}
+
+// --- update banner ---------------------------------------------------------
 
 @Composable
 private fun UpdateBanner(
@@ -179,15 +360,28 @@ private fun UpdateBanner(
 @Composable
 private fun Header() {
     Column {
-        Text(
-            "Poker Odds",
-            style = MaterialTheme.typography.displaySmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                "Poker like a",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "PRO!",
+                fontFamily = FontFamily.Cursive,
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.rotate(-14f),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Text(
             "Texas Hold'em win probability",
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         )
     }
 }
@@ -212,90 +406,6 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun CardRow(
-    cards: List<PlayingCard>,
-    onAdd: () -> Unit,
-    onRemove: (PlayingCard) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        cards.forEach { card ->
-            PlayingCardView(
-                card = card,
-                modifier = Modifier.width(84.dp).clickable { onRemove(card) },
-            )
-        }
-        if (cards.size < 2) {
-            EmptySlot(modifier = Modifier.width(84.dp).clickable { onAdd() })
-        }
-        Spacer(Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun PlayingCardView(card: PlayingCard, modifier: Modifier = Modifier) {
-    val suitColor = if (card.suit.isRed) ChipRed else InkBlack
-    Box(
-        modifier = modifier
-            .aspectRatio(0.7f)
-            .clip(RoundedCornerShape(8.dp))
-            .background(CardWhite)
-            .border(1.dp, Color(0x33000000), RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(card.rank.symbol, color = suitColor, fontWeight = FontWeight.Bold, fontSize = 26.sp)
-            Text(card.suit.glyph, color = suitColor, fontSize = 24.sp)
-        }
-    }
-}
-
-@Composable
-private fun EmptySlot(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .aspectRatio(0.7f)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
-                RoundedCornerShape(8.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("+", fontSize = 28.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-    }
-}
-
-@Composable
-private fun PlayerStepper(count: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { onChange(count - 1) }, enabled = count > MIN_PLAYERS) {
-            Text("−", fontSize = 26.sp, color = MaterialTheme.colorScheme.onSurface)
-        }
-        Text(
-            "$count",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.width(48.dp),
-            textAlign = TextAlign.Center,
-        )
-        IconButton(onClick = { onChange(count + 1) }, enabled = count < MAX_PLAYERS) {
-            Text("+", fontSize = 26.sp, color = MaterialTheme.colorScheme.onSurface)
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            "players (you + ${count - 1})",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-        )
-    }
-}
-
-@Composable
 private fun ResultPanel(result: PreflopEquity) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -313,13 +423,6 @@ private fun ResultPanel(result: PreflopEquity) {
                 style = MaterialTheme.typography.displaySmall,
                 color = WinGreen,
             )
-            if (result.tiePercent >= 0.05) {
-                Text(
-                    "Includes %.1f%% ties (counted as wins)".format(result.tiePercent),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                )
-            }
 
             Spacer(Modifier.height(16.dp))
             OutcomeBar(result.winCountingTiesPercent, result.losePercent)
@@ -408,72 +511,6 @@ private fun CategoryRow(category: HandCategory, percent: Double) {
                     .fillMaxSize()
                     .clip(RoundedCornerShape(3.dp))
                     .background(MaterialTheme.colorScheme.primary),
-            )
-        }
-    }
-}
-
-@Composable
-private fun CardPickerDialog(
-    used: Set<PlayingCard>,
-    onPick: (PlayingCard) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Column(Modifier.padding(16.dp)) {
-                Text(
-                    "Select a card",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(Suit.entries.size),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.height(420.dp),
-                ) {
-                    items(PlayingCard.FULL_DECK) { card ->
-                        val disabled = used.contains(card)
-                        PickerCell(card, disabled) { if (!disabled) onPick(card) }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Done")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PickerCell(card: PlayingCard, disabled: Boolean, onClick: () -> Unit) {
-    val suitColor = if (card.suit.isRed) ChipRed else InkBlack
-    Box(
-        modifier = Modifier
-            .aspectRatio(0.72f)
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (disabled) Color(0xFFBDBDBD) else CardWhite)
-            .border(1.dp, Color(0x22000000), RoundedCornerShape(6.dp))
-            .clickable(enabled = !disabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                card.rank.symbol,
-                color = if (disabled) Color(0x55000000) else suitColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-            Text(
-                card.suit.glyph,
-                color = if (disabled) Color(0x55000000) else suitColor,
-                fontSize = 14.sp,
             )
         }
     }
