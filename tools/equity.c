@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #define MAX_PLAYERS 6
 #define MIN_PLAYERS 2
@@ -261,11 +262,12 @@ typedef struct {
     long long tie_scaled[NUM_HANDS];
 } fold_stats_t;
 
-/* Full-table games needed so the rarest class (a pocket pair — 6 of the 1326
- * two-card combos) is sampled ~`target` times. Integer math, no libm. */
+/* Full-table games needed so the rarest class is sampled ~`target` times.
+ * Suited hands are the rarest — 4 of the 1326 two-card combos (a pair has 6,
+ * an offsuit hand 12). Integer math, no libm. */
 static long games_for(int players, long target) {
     long long num = (long long)target * 1326;
-    long long den = 6LL * players;
+    long long den = 4LL * players; /* 4 suited combos per class */
     return (long)((num + den - 1) / den);
 }
 
@@ -494,10 +496,16 @@ int main(int argc, char **argv) {
 
     /* Pass 1: standard equity + category distribution. Each (class,players) is
      * seeded from a disjoint block so output is deterministic across threads. */
+    long long total_games = 0;      /* full-table games dealt, both passes */
+    long long min_samples = LLONG_MAX;
+    int min_class = 0, min_players = 0;
     for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
+        int gps = 52 / (5 + 2 * players);
+        total_games += 2 * ((games_for(players, target) + gps - 1) / gps) * gps; /* both passes */
         stats_t s;
         run_equity(players, target, ((uint64_t)players * 2) << 32, &s);
         for (int c = 0; c < NUM_HANDS; c++) {
+            if (s.cnt[c] < min_samples) { min_samples = s.cnt[c]; min_class = c; min_players = players; }
             double cnt = (double)s.cnt[c];
             double w = s.win[c] / cnt;
             double t = (double)s.tie_scaled[c] / (TIE_SCALE * cnt);
@@ -508,6 +516,15 @@ int main(int argc, char **argv) {
             for (int j = 0; j < 9; j++) CAT[c][players][j] = s.cat[c][j] / cnt;
         }
     }
+
+    /* Report sampling coverage; alert if any class is thinly sampled. Every
+     * (class, players) cell is worth at least ~`target` samples by design, so a
+     * count below the floor means `target` is too small or games_for() broke. */
+    fprintf(stderr, "sampling: %lld games; min %lld samples/class (%s %dp)\n",
+            total_games, min_samples, hands[min_class].label, min_players);
+    if (min_samples < 1000)
+        fprintf(stderr, "WARNING: %s %dp has only %lld samples (< 1000) — raise the target\n",
+                hands[min_class].label, min_players, min_samples);
 
     /* Pass 2: fold-adjusted equity, deciding folds from the pass-1 table. */
     for (int players = MIN_PLAYERS; players <= MAX_PLAYERS; players++) {
