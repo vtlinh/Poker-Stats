@@ -61,7 +61,7 @@ val keystoreProperties = Properties().apply {
 }
 
 fun secret(envKey: String, propKey: String): String? =
-    System.getenv(envKey) ?: keystoreProperties.getProperty(propKey)
+    System.getenv(envKey)?.takeIf { it.isNotBlank() } ?: keystoreProperties.getProperty(propKey)
 
 android {
     namespace = "com.pokerstats.odds"
@@ -145,4 +145,9 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)
+
+    // Instrumented launch smoke test.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
