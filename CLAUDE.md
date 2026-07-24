@@ -45,21 +45,25 @@ tools/                                 # C + Python generator for poker_equity.d
   `win` is the sole-win rate; `tie` is **split-pot equity** (a k-way tie counts
   `1/k`, not a whole win); `lose = 1 - win - tie`. The UI shows the hero's
   equity, `win + tie`.
-- Two fold-adjusted equities ride alongside (same 169×5 rows, `user_version 3`):
+- Fold-adjusted equities ride alongside (same 169×5 rows, `user_version 4`):
   - **`win_fold`/`tie_fold`** — **Pre-flop fold**: opponents (and the hero) fold
     hands whose equity is below break-even `1/players`; the field is thinned once
     before showdown.
-  - **`post_fold_win`/`post_fold_tie`** — **Post-flop fold**: pre-flop survivors
-    also fold weak *flops* (bucketed flop equity below the shrunk break-even
-    `1/remaining`), the hero included, averaged over every flop. A hand the hero
-    folds pre-flop has no post-flop equity (0). The UI shows three ascending
-    splits: **Win Probability → Pre-flop fold → Post-flop fold** (post-flop can
-    dip below pre-flop for drawing hands, since the hero folds the flops it
-    misses).
+  - **`post_fold_win/tie`**, **`turn_fold_win/tie`**, **`river_fold_win/tie`** —
+    **Post-flop / Post-turn / Post-river fold**: a fold *cascade* keeps thinning
+    the field street by street (survivors fold whenever their bucketed equity on
+    that street is below the shrunk `1/remaining`), the hero included. Each column
+    is the aggregate if folding stops after that street (showdown among its
+    survivors), averaged over every board. A hand the hero folds pre-flop has no
+    later-street equity (0). The Hands tab shows five ascending splits: **Win
+    Probability → Pre-flop → Post-flop → Post-turn → Post-river** (later streets
+    can dip below earlier ones for drawing hands, since the hero folds the
+    boards it misses).
 - The UI has two tabs in a sticky footer: **Hands** (the single-hand
   calculator) and **Table** — a single 13×13 starting-hand grid that fills the
   screen (no scrolling), with a **mode slider** picking the metric: **Default**
-  (Win Probability), **Pre-flop fold**, **Post-flop fold** (`tableModes()`).
+  (Win Probability), **Pre-flop**, **Post-flop**, **Turn**, **River**
+  (`tableModes()`).
   Two color modes: **Win Probability** is break-even-anchored (yellow at 1/N,
   easing `|t|^0.6` on `t = log2(equity/breakEven)` clamped to ±1, green above /
   red below); the **fold grids** — whose survivors all sit well above break-even
@@ -88,13 +92,15 @@ The numbers are computed **offline**, never in the app:
   regardless of thread count. The `target` argument (default 1,000,000) is the
   sample count for the rarest class; commoner classes get proportionally more.
   It runs three passes over reused deals: (1) raw preflop equity — which also
-  fills a RAM-only bucketed flop-equity table (made 5-card category × flush-draw
-  × straight-draw, relative to the hand) used only to decide post-flop folds;
-  (2) the **Pre-flop fold** table; and (3) the **Post-flop fold** table via
-  `run_postfold` (two fold rounds — pre-flop `equity < 1/k`, then post-flop
-  `bucketed flop equity < 1/remaining` — then showdown among survivors, recorded
-  per pre-flop survivor and averaged over flops). The bucketed table is never
-  shipped, so there is no Kotlin flop math and no parity risk.
+  fills RAM-only bucketed **street**-equity tables (one each for flop/turn/river;
+  a bucket is made 5-card category × flush-potential × straight-potential over
+  the hole cards + that street's board, via `board_bucket`) used only to decide
+  street folds; (2) the **Pre-flop fold** table; and (3) the post-flop/turn/river
+  fold tables via `run_streetfold` (a four-round fold cascade — pre-flop
+  `equity < 1/k`, then flop/turn/river each `bucketed equity < 1/remaining` — with
+  a showdown among each street's survivor set, recorded per pre-flop survivor and
+  averaged over boards). The bucketed tables are never shipped, so there is no
+  Kotlin board math and no parity risk.
 - `tools/build_equity_db.py` packs the generator's TSV into the SQLite asset;
   `generate_db.py` / `make db` runs the whole pipeline.
 - `tools/test_equity.py` (`make test`) pins canonical equities (`AA` heads-up
