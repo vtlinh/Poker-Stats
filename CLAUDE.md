@@ -42,7 +42,9 @@ tools/                                 # C + Python generator for poker_equity.d
   the two cards to a canonical class (`AA`, `AKs`, `AKo`, `72o`, …) and reads
   one indexed row. **No poker math on device — there is no Kotlin evaluator.**
 - The DB stores `win`, `tie`, `lose` and a hand-category distribution per cell.
-  The UI shows win probability with **ties counted as wins** (`win + tie`).
+  `win` is the sole-win rate; `tie` is **split-pot equity** (a k-way tie counts
+  `1/k`, not a whole win); `lose = 1 - win - tie`. The UI shows the hero's
+  equity, `win + tie`.
 - `EquityDatabase` copies the asset to the app's databases dir on first use and
   recopies if the asset's `PRAGMA user_version` changes.
 

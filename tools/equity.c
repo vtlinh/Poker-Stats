@@ -2,11 +2,15 @@
  * equity.c — fast Monte-Carlo generator for the precomputed preflop-equity table.
  *
  * For each of the 169 canonical Texas Hold'em starting hands and each total
- * player count (2..MAX_PLAYERS), it Monte-Carlos the win/tie/lose probability
- * and the hero's final-hand-category distribution, and prints one TSV row per
+ * player count (2..MAX_PLAYERS), it Monte-Carlos the win/tie/lose equity and
+ * the hero's final-hand-category distribution, and prints one TSV row per
  * (hand, players) to stdout:
  *
  *     hand<TAB>players<TAB>win<TAB>tie<TAB>lose<TAB>win_fold<TAB>tie_fold<TAB>{category json}
+ *
+ * `win` is the sole-win rate; `tie` is split-pot *equity* (a k-way tie counts
+ * 1/k, not a whole win); `lose = 1 - win - tie` is the field's share. So the
+ * hero's true equity is `win + tie`.
  *
  * `win_fold`/`tie_fold` are the fold-adjusted equity: the hero's win/tie rate
  * when every player whose own N-player equity is below break-even (1/N) folds
@@ -239,7 +243,8 @@ static result_t simulate(int c1, int c2, int players, long trials, uint64_t seed
     for (int c = 0; c < 52; c++) if (c != c1 && c != c2) deck[deck_n++] = c;
 
     int need = 5 + 2 * opponents; /* full board + opponents' hole cards */
-    long wins = 0, ties = 0, losses = 0;
+    long wins = 0;            /* deals the hero is the sole best hand */
+    double tie_equity = 0.0;  /* split-pot equity: 1/k per k-way tie */
     long cat_counts[9] = {0};
 
     rng_t rng;
@@ -262,22 +267,26 @@ static result_t simulate(int c1, int c2, int players, long trials, uint64_t seed
         cat_counts[hero_score >> CATEGORY_SHIFT]++;
 
         int best_opp = -1;
+        int tie_opp = 0; /* opponents sharing the current best opponent score */
         int idx = 5;
         for (int o = 0; o < opponents; o++) {
             opp[0] = deck[idx++];
             opp[1] = deck[idx++];
             int s = evaluate(opp, 7);
-            if (s > best_opp) best_opp = s;
+            if (s > best_opp) { best_opp = s; tie_opp = 1; }
+            else if (s == best_opp) tie_opp++;
         }
 
         if (hero_score > best_opp) wins++;
-        else if (hero_score < best_opp) losses++;
-        else ties++;
+        else if (hero_score == best_opp) tie_equity += 1.0 / (tie_opp + 1);
+        /* else the hero is beaten and takes nothing */
     }
 
     result_t r;
     double n = (double)trials;
-    r.win = wins / n; r.tie = ties / n; r.lose = losses / n;
+    r.win = wins / n;
+    r.tie = tie_equity / n;         /* split-pot equity share, not a raw count */
+    r.lose = 1.0 - r.win - r.tie;   /* the rest of the pot goes to the field */
     for (int c = 0; c < 9; c++) r.cat[c] = cat_counts[c] / n;
     return r;
 }
@@ -300,7 +309,8 @@ static void simulate_fold(int c1, int c2, int players, long trials, uint64_t see
 
     int need = 5 + 2 * opponents;
     double thresh = 1.0 / players;
-    long wins = 0, ties = 0;
+    long wins = 0;            /* deals the hero wins outright (or uncontested) */
+    double tie_equity = 0.0;  /* split-pot equity: 1/k per k-way tie */
 
     rng_t rng;
     rng_seed(&rng, seed);
@@ -319,6 +329,7 @@ static void simulate_fold(int c1, int c2, int players, long trials, uint64_t see
         int hero_score = evaluate(hero, 7);
 
         int best_opp = -1;
+        int tie_opp = 0; /* staying opponents sharing the best opponent score */
         int idx = 5;
         for (int o = 0; o < opponents; o++) {
             int a = deck[idx++];
@@ -326,17 +337,17 @@ static void simulate_fold(int c1, int c2, int players, long trials, uint64_t see
             if (equity[classify(a, b)][players] < thresh) continue; /* opponent folds */
             opp[0] = a; opp[1] = b;
             int s = evaluate(opp, 7);
-            if (s > best_opp) best_opp = s;
+            if (s > best_opp) { best_opp = s; tie_opp = 1; }
+            else if (s == best_opp) tie_opp++;
         }
 
-        if (best_opp < 0) wins++;                 /* everyone folded */
-        else if (hero_score > best_opp) wins++;
-        else if (hero_score == best_opp) ties++;
+        if (best_opp < 0 || hero_score > best_opp) wins++; /* uncontested or sole best */
+        else if (hero_score == best_opp) tie_equity += 1.0 / (tie_opp + 1);
     }
 
     double n = (double)trials;
     *out_win = wins / n;
-    *out_tie = ties / n;
+    *out_tie = tie_equity / n;
 }
 
 /* --- self test ----------------------------------------------------------- */
