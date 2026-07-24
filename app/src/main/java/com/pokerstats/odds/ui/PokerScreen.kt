@@ -853,9 +853,10 @@ private fun gradeColor(t: Float): Color {
 
 // --- sticky footer tabs ----------------------------------------------------
 
-// A lighter slate panel so the footer reads as a raised bar over the near-black
-// screen, with a gold top edge to separate it from the content above.
-private val FooterBackground = Color(0xFF22432F)
+// A lighter slate panel so the footer reads as a raised bar, clearly distinct
+// from both the near-black screen and the card green. A light hairline tops it
+// off (gold is reserved for the selected tab's indicator).
+private val FooterBackground = Color(0xFF2E5B43)
 
 @Composable
 private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
@@ -868,8 +869,8 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(2.dp)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)),
         )
         Row(Modifier.fillMaxWidth()) {
             Tab.entries.forEach { tab ->
