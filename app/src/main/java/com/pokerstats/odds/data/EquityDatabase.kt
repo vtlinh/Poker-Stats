@@ -14,6 +14,8 @@ data class PreflopEquity(
     val win: Double,
     val tie: Double,
     val lose: Double,
+    val winFold: Double,
+    val tieFold: Double,
     val categoryFrequency: Map<HandCategory, Double>,
 ) {
     /** Win probability with ties counted as wins. */
@@ -23,6 +25,14 @@ data class PreflopEquity(
     val tiePercent: Double get() = tie * 100.0
     val losePercent: Double get() = lose * 100.0
     val winCountingTiesPercent: Double get() = winCountingTies * 100.0
+
+    /**
+     * Fold-adjusted win probability (ties counted as wins): the chance of
+     * winning once every opponent whose own equity is below the break-even
+     * threshold 1/players folds pre-flop.
+     */
+    val winFoldCountingTies: Double get() = winFold + tieFold
+    val winFoldCountingTiesPercent: Double get() = winFoldCountingTies * 100.0
 }
 
 /**
@@ -80,7 +90,8 @@ class EquityDatabase(private val appContext: Context) {
 
     fun lookup(handClass: String, players: Int): PreflopEquity? {
         val cursor = database().rawQuery(
-            "SELECT win, tie, lose, categories FROM equity WHERE hand_class = ? AND players = ? LIMIT 1",
+            "SELECT win, tie, lose, win_fold, tie_fold, categories " +
+                "FROM equity WHERE hand_class = ? AND players = ? LIMIT 1",
             arrayOf(handClass, players.toString()),
         )
         cursor.use { c ->
@@ -91,7 +102,9 @@ class EquityDatabase(private val appContext: Context) {
                 win = c.getDouble(0),
                 tie = c.getDouble(1),
                 lose = c.getDouble(2),
-                categoryFrequency = parseCategories(c.getString(3)),
+                winFold = c.getDouble(3),
+                tieFold = c.getDouble(4),
+                categoryFrequency = parseCategories(c.getString(5)),
             )
         }
     }
@@ -107,7 +120,7 @@ class EquityDatabase(private val appContext: Context) {
 
     companion object {
         private const val ASSET_NAME = "poker_equity.db"
-        private const val EXPECTED_VERSION = 1
+        private const val EXPECTED_VERSION = 2
 
         /** Canonical starting-hand key, e.g. "AA", "AKs", "AKo", "72o". */
         fun canonicalKey(a: Card, b: Card): String {

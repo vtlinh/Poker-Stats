@@ -438,6 +438,9 @@ private fun ResultPanel(result: PreflopEquity) {
                 color = WinGreen,
             )
 
+            Spacer(Modifier.height(12.dp))
+            FoldMetric(result)
+
             Spacer(Modifier.height(16.dp))
             OutcomeBar(result.winCountingTiesPercent, result.losePercent)
 
@@ -463,6 +466,47 @@ private fun ResultPanel(result: PreflopEquity) {
                     .forEach { (category, freq) -> CategoryRow(category, freq * 100.0) }
             }
         }
+    }
+}
+
+@Composable
+private fun FoldMetric(result: PreflopEquity) {
+    // Everyone folds hands below break-even (1/N); the hero included. If the
+    // hero's own hand is below break-even, the hero folds rather than plays.
+    val heroFolds = result.winCountingTies < 1.0 / result.players
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Pre-flop fold",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (heroFolds) {
+                    "below break-even (1 in ${result.players}) — fold this hand"
+                } else {
+                    "if weak hands fold below break-even (1 in ${result.players})"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            if (heroFolds) "Fold" else "%.1f%%".format(result.winFoldCountingTiesPercent),
+            style = MaterialTheme.typography.headlineSmall,
+            color = if (heroFolds) LoseRed else MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 

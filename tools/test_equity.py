@@ -31,6 +31,7 @@ def _generate(binary, trials):
         p = line.split("\t")
         data[(p[0], int(p[1]))] = {
             "win": float(p[2]), "tie": float(p[3]), "lose": float(p[4]),
+            "win_fold": float(p[5]), "tie_fold": float(p[6]),
         }
     return data
 
@@ -72,3 +73,41 @@ def test_more_opponents_lowers_equity(equity_binary):
     heads_up = data[("AA", 2)]["win"] + data[("AA", 2)]["tie"]
     six_way = data[("AA", 6)]["win"] + data[("AA", 6)]["tie"]
     assert heads_up > six_way
+
+
+def test_fold_equity_model(equity_binary):
+    # Everyone (including the hero) folds hands below break-even (1/N):
+    #  - a clearly-below-break-even hero folds and loses -> fold equity == 0
+    #  - a clearly-above hero plays; opponents folding weak hands only help, so
+    #    the fold-adjusted rate is >= the plain rate (allow for MC noise).
+    data = _generate(equity_binary, 40_000)
+    for (hand, players), r in data.items():
+        std = r["win"] + r["tie"]
+        fold = r["win_fold"] + r["tie_fold"]
+        threshold = 1.0 / players
+        assert 0.0 <= fold <= 1.0
+        if std < threshold - 0.02:
+            assert fold == 0.0, f"{hand} {players}: expected fold 0, got {fold}"
+        elif std > threshold + 0.02:
+            assert fold >= std - 0.02, f"{hand} {players}: fold {fold} < std {std}"
+
+
+def test_fold_boosts_multiway_more_than_headsup(equity_binary):
+    # AA clears break-even at every table size, so it always plays. Folding
+    # matters more as the table grows (more opponents to fold), so AA gains more
+    # equity from the fold assumption six-handed than heads-up.
+    data = _generate(equity_binary, 60_000)
+
+    def gain(hand, players):
+        r = data[(hand, players)]
+        return (r["win_fold"] + r["tie_fold"]) - (r["win"] + r["tie"])
+
+    assert gain("AA", 6) > gain("AA", 2)
+
+
+def test_weak_hero_folds_to_zero(equity_binary):
+    # 72o is far below break-even everywhere, so the hero always folds it.
+    data = _generate(equity_binary, 40_000)
+    for players in (2, 3, 4, 5, 6):
+        r = data[("72o", players)]
+        assert r["win_fold"] + r["tie_fold"] == 0.0
