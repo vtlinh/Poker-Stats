@@ -369,8 +369,8 @@ private fun RankWheel(
 
 /**
  * Suited control shown to the right of the hand wheels: a "Suited" label above a
- * switch (on = suited, off = offsuit). Pairs can't be suited, so they show a
- * muted "Pair" instead. Fixed width so the wheels don't shift between states.
+ * switch (on = suited, off = offsuit). Pairs can't be suited, so the control is
+ * disabled and greyed out. Fixed width so the wheels don't shift between states.
  */
 @Composable
 private fun SuitedControl(isPair: Boolean, suited: Boolean, onChange: (Boolean) -> Unit) {
@@ -378,21 +378,17 @@ private fun SuitedControl(isPair: Boolean, suited: Boolean, onChange: (Boolean) 
         modifier = Modifier.width(64.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (isPair) {
-            Text(
-                "Pair",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            )
-        } else {
-            Text(
-                "Suited",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(6.dp))
-            Switch(checked = suited, onCheckedChange = onChange)
-        }
+        Text(
+            "Suited",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isPair) 0.35f else 1f),
+        )
+        Spacer(Modifier.height(6.dp))
+        Switch(
+            checked = suited && !isPair,
+            onCheckedChange = onChange,
+            enabled = !isPair,
+        )
     }
 }
 
