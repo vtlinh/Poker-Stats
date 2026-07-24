@@ -19,7 +19,7 @@ project **[download page][pages]**. Once installed, the app **updates itself**:
 when a newer release exists, a banner appears at the top — tap it to download and
 install.
 
-[releases]: https://github.com/vtlinh/Poker-Stats/releases/latest
+[releases]: https://github.com/vtlinh/Poker-Stats/releases/download/poker-latest/poker-odds.apk
 [pages]: https://vtlinh.github.io/Poker-Stats/
 
 > The app is distributed as an APK. Enable **Install unknown apps** for your

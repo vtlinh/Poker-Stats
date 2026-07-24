@@ -72,25 +72,38 @@ Computed in `app/build.gradle.kts` at build time:
 - `build` = commits in the current ISO week + 1 (resets weekly, grows per build);
   override with the `BUILD_VERSION` env var.
 
-`versionCode = (major*100 + minor)*1000 + build` (monotonic). CI checks out with
-`fetch-depth: 0` so the weekly commit count is accurate.
+For local/PR builds `versionCode = (major*100 + minor)*1000 + build` (monotonic);
+CI checks out with `fetch-depth: 0` so the weekly commit count is accurate. The
+rolling release overrides both `versionName`/`versionCode` via env vars (see
+below).
 
-On a **release** build, `release.yml` sets `RELEASE_VERSION_NAME` from the git
-tag, which pins the APK's `versionName`/`versionCode` to exactly the tag (e.g.
-tag `v1.30.2` → app version `1.30.2`). This keeps the in-app updater — which
-compares the release tag against the installed app's self-reported version —
-always consistent. Debug/CI builds keep the date-based computation. So: **tag
-each release `v<major>.<minor>.<build>` with an incrementing number.**
+On the **rolling release** (`release.yml`, on every push to `main`), the
+workflow sets `VERSION_CODE = 1_000_000 + <run number>` and a matching
+`VERSION_NAME = <major>.<minor>.<run number>`, pinning the published APK's
+version. The `versionCode` is monotonic and always above older date-based
+installs (e.g. `130002`), so each new build is offered as an update. Debug/PR
+builds keep the date-based computation. **No git tags — just merge to `main`.**
 
-## In-app auto-update
+## In-app auto-update (tagless rolling release)
+
+Every push to `main` publishes the signed APK plus a `version.json`
+(`{ "versionCode": N, "versionName": "a.b.c" }`) to a single fixed GitHub
+release tagged **`poker-latest`**, clobbering the previous assets. The download
+URLs are therefore constant:
+
+- `releases/download/poker-latest/poker-odds.apk`
+- `releases/download/poker-latest/version.json`
 
 `UpdateManager` (banner wired in `PokerScreen`/`PokerViewModel`):
 
-1. On launch, `cleanupOldDownloads` deletes any downloaded APK ≤ the current
-   version, then `checkForUpdate` queries the `UPDATE_REPO` GitHub
-   `releases/latest` and compares versions numerically.
+1. On launch **and every time the app returns to the foreground**,
+   `cleanupOldDownloads` deletes any downloaded APK ≤ the current
+   `BuildConfig.VERSION_CODE`, then `checkForUpdate` GETs `version.json` and
+   compares its integer `versionCode` against the installed build. No tags, no
+   release enumeration — one unauthenticated request answers "is there an
+   update?".
 2. If newer, a top banner appears. Tapping downloads `poker-odds.apk` to
-   `filesDir/updates/poker-odds-<version>.apk` — **once per version** (an
+   `filesDir/updates/poker-odds-<versionCode>.apk` — **once per version** (an
    existing file is reused).
 3. Installs via `FileProvider` + the system package installer, requesting
    "install unknown apps" if needed.
@@ -121,7 +134,7 @@ Release signing is driven by secrets (env vars, then optional local
 - **`ci.yml`** — push/PR: lint + a **signed release** APK artifact (same build type
   that ships), `fetch-depth: 0`.
 - **`equity-tools.yml`** — push/PR touching `tools/**`: builds the C generator and runs its tests.
-- **`release.yml`** — `v*` tag: signed release APK → GitHub Release as `poker-odds.apk`.
+- **`release.yml`** — push to `main` (tagless rolling release): signed APK + `version.json` clobbered onto the fixed `poker-latest` GitHub Release.
 - **`pages.yml`** — deploys `docs/` (download page) to GitHub Pages.
 
 ## Conventions
