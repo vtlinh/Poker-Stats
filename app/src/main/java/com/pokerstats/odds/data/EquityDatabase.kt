@@ -16,6 +16,8 @@ data class PreflopEquity(
     val lose: Double,
     val winFold: Double,
     val tieFold: Double,
+    val postFoldWin: Double,
+    val postFoldTie: Double,
     val categoryFrequency: Map<HandCategory, Double>,
 ) {
     /** Win probability with ties counted as wins. */
@@ -33,6 +35,16 @@ data class PreflopEquity(
      */
     val winFoldCountingTies: Double get() = winFold + tieFold
     val winFoldCountingTiesPercent: Double get() = winFoldCountingTies * 100.0
+
+    /**
+     * Post-flop fold-adjusted win probability (ties counted as wins): opponents
+     * fold weak hands both pre-flop *and* on the flop (equity below the shrunk
+     * break-even 1/remaining), and the hero folds its own weak flops too, all
+     * averaged over every possible flop. A hand that folds pre-flop has no
+     * post-flop equity (0).
+     */
+    val postFoldCountingTies: Double get() = postFoldWin + postFoldTie
+    val postFoldCountingTiesPercent: Double get() = postFoldCountingTies * 100.0
 }
 
 /**
@@ -90,7 +102,7 @@ class EquityDatabase(private val appContext: Context) {
 
     fun lookup(handClass: String, players: Int): PreflopEquity? {
         val cursor = database().rawQuery(
-            "SELECT win, tie, lose, win_fold, tie_fold, categories " +
+            "SELECT win, tie, lose, win_fold, tie_fold, post_fold_win, post_fold_tie, categories " +
                 "FROM equity WHERE hand_class = ? AND players = ? LIMIT 1",
             arrayOf(handClass, players.toString()),
         )
@@ -104,7 +116,9 @@ class EquityDatabase(private val appContext: Context) {
                 lose = c.getDouble(2),
                 winFold = c.getDouble(3),
                 tieFold = c.getDouble(4),
-                categoryFrequency = parseCategories(c.getString(5)),
+                postFoldWin = c.getDouble(5),
+                postFoldTie = c.getDouble(6),
+                categoryFrequency = parseCategories(c.getString(7)),
             )
         }
     }
@@ -120,7 +134,7 @@ class EquityDatabase(private val appContext: Context) {
 
     companion object {
         private const val ASSET_NAME = "poker_equity.db"
-        private const val EXPECTED_VERSION = 2
+        private const val EXPECTED_VERSION = 3
 
         /** Canonical starting-hand key, e.g. "AA", "AKs", "AKo", "72o". */
         fun canonicalKey(a: Card, b: Card): String {

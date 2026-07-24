@@ -45,6 +45,17 @@ tools/                                 # C + Python generator for poker_equity.d
   `win` is the sole-win rate; `tie` is **split-pot equity** (a k-way tie counts
   `1/k`, not a whole win); `lose = 1 - win - tie`. The UI shows the hero's
   equity, `win + tie`.
+- Two fold-adjusted equities ride alongside (same 169×5 rows, `user_version 3`):
+  - **`win_fold`/`tie_fold`** — **Pre-flop fold**: opponents (and the hero) fold
+    hands whose equity is below break-even `1/players`; the field is thinned once
+    before showdown.
+  - **`post_fold_win`/`post_fold_tie`** — **Post-flop fold**: pre-flop survivors
+    also fold weak *flops* (bucketed flop equity below the shrunk break-even
+    `1/remaining`), the hero included, averaged over every flop. A hand the hero
+    folds pre-flop has no post-flop equity (0). The UI shows three ascending
+    splits: **Win Probability → Pre-flop fold → Post-flop fold** (post-flop can
+    dip below pre-flop for drawing hands, since the hero folds the flops it
+    misses).
 - `EquityDatabase` copies the asset to the app's databases dir on first use and
   recopies if the asset's `PRAGMA user_version` changes.
 
@@ -64,10 +75,20 @@ The numbers are computed **offline**, never in the app:
   games and reduces with integer accumulators, so output is deterministic
   regardless of thread count. The `target` argument (default 1,000,000) is the
   sample count for the rarest class; commoner classes get proportionally more.
+  It runs three passes over reused deals: (1) raw preflop equity — which also
+  fills a RAM-only bucketed flop-equity table (made 5-card category × flush-draw
+  × straight-draw, relative to the hand) used only to decide post-flop folds;
+  (2) the **Pre-flop fold** table; and (3) the **Post-flop fold** table via
+  `run_postfold` (two fold rounds — pre-flop `equity < 1/k`, then post-flop
+  `bucketed flop equity < 1/remaining` — then showdown among survivors, recorded
+  per pre-flop survivor and averaged over flops). The bucketed table is never
+  shipped, so there is no Kotlin flop math and no parity risk.
 - `tools/build_equity_db.py` packs the generator's TSV into the SQLite asset;
   `generate_db.py` / `make db` runs the whole pipeline.
 - `tools/test_equity.py` (`make test`) pins canonical equities (`AA` heads-up
-  ≈ 85%, `AA` 6-handed ≈ 49%, `72o` worst) and runs the C self-test.
+  ≈ 85%, `AA` 6-handed ≈ 49%, `72o` worst), checks the fold invariants
+  (pre-flop folders have zero post-flop equity; premiums gain from the thinned
+  field), and runs the C self-test.
 - **If you change the evaluator, keep `make test` green and regenerate the DB.**
   The `HandCategory` enum names in the app must stay in sync with the category
   keys emitted by `equity.c`.

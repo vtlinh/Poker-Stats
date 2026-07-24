@@ -33,6 +33,7 @@ def _generate(binary, trials):
         data[(p[0], int(p[1]))] = {
             "win": float(p[2]), "tie": float(p[3]), "lose": float(p[4]),
             "win_fold": float(p[5]), "tie_fold": float(p[6]),
+            "post_fold_win": float(p[7]), "post_fold_tie": float(p[8]),
         }
     return data
 
@@ -112,6 +113,31 @@ def test_weak_hero_folds_to_zero(equity_binary):
     for players in (2, 3, 4, 5, 6):
         r = data[("72o", players)]
         assert r["win_fold"] + r["tie_fold"] == 0.0
+
+
+def test_post_fold_bounds_and_preflop_folders(equity_binary):
+    # Post-flop fold is only defined for hands the hero plays pre-flop: a hand
+    # that folds pre-flop (win_fold + tie_fold == 0) never reaches the flop, so
+    # its post-flop-fold equity is 0 too. Everything else stays in [0, 1].
+    data = _generate(equity_binary, 40_000)
+    for (hand, players), r in data.items():
+        post = r["post_fold_win"] + r["post_fold_tie"]
+        assert 0.0 <= post <= 1.0, f"{hand} {players}: post-fold {post} out of range"
+        if r["win_fold"] + r["tie_fold"] == 0.0:
+            assert post == 0.0, f"{hand} {players}: pre-flop folder has post-fold {post}"
+
+
+def test_post_fold_beats_preflop_fold_for_premium_hands(equity_binary):
+    # AA (and KK) clear break-even at every table size and connect with almost
+    # every flop, so they keep playing post-flop while opponents thin further.
+    # Averaged over flops that leaves them ahead of the pre-flop-fold number.
+    data = _generate(equity_binary, 80_000)
+    for hand in ("AA", "KK"):
+        for players in (2, 3, 4, 5, 6):
+            r = data[(hand, players)]
+            pre = r["win_fold"] + r["tie_fold"]
+            post = r["post_fold_win"] + r["post_fold_tie"]
+            assert post >= pre - 0.02, f"{hand} {players}: post {post} < pre {pre}"
 
 
 def _min_samples(binary, target):
