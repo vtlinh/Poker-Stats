@@ -75,11 +75,11 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sign
 
-// Deep, near-black slate-green with a subtle top glow.
+// Neutral dark slate with a subtle top glow — clear of the probability colors.
 private val ScreenBackground = Brush.verticalGradient(
-    0f to Color(0xFF16291D),
-    0.42f to Color(0xFF0B0F0D),
-    1f to Color(0xFF080A09),
+    0f to Color(0xFF1C2632),
+    0.42f to Color(0xFF141A22),
+    1f to Color(0xFF0E131A),
 )
 
 // Ranks high→low, matching the poker-matrix layout (A across the top/left).
@@ -182,7 +182,7 @@ private class TableMode(
 private fun tableModes(players: Int) = listOf(
     TableMode(
         "Default", "Win Probability",
-        "Chance to win (ties split), all players to showdown", true,
+        "Chance to win (ties split), all players to showdown", false,
     ) { it.winCountingTiesPercent },
     TableMode(
         "Pre-flop", "Pre-flop fold",
@@ -830,15 +830,14 @@ private fun metricColor(pct: Double, breakEven: Double?, sorted: List<Double>): 
     else -> Color.White
 }
 
-// Dark panel behind the ranked list so the colored % chips and labels pop.
-private val ListPanel = Color(0xFF0C1310)
-private val ListRowAlt = Color(0xFF121C17)
+// Dark panel behind the ranked list, showing in the gaps between colored rows.
+private val ListPanel = Color(0xFF0C1017)
 
 /**
- * A ranked list of hands by the current metric. Each hand's value sits on a
- * colored chip (the same ramp as the grid) so it reads clearly on the dark
- * panel. Folded (0%) hands are dropped. The list scrolls inside a fixed-height
- * box; it updates with the slider and player count.
+ * A ranked list of hands by the current metric. Each row is filled with the
+ * hand's grid color (the same ramp as the Table cell) with white text, so it
+ * reads as a colored bar. Folded (0%) hands are dropped. The list scrolls inside
+ * a fixed-height box; it updates with the slider and player count.
  */
 @Composable
 private fun HandRankingList(title: String, values: List<Pair<String, Double>>, breakEven: Double?) {
@@ -863,12 +862,15 @@ private fun HandRankingList(title: String, values: List<Pair<String, Double>>, b
                     .height(300.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(ListPanel),
+                contentPadding = PaddingValues(4.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 itemsIndexed(ranked) { i, (hand, pct) ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(if (i % 2 == 1) ListRowAlt else Color.Transparent)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(metricColor(pct, breakEven, sorted))
                             .padding(horizontal = 12.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -876,7 +878,7 @@ private fun HandRankingList(title: String, values: List<Pair<String, Double>>, b
                             "${i + 1}",
                             modifier = Modifier.width(32.dp),
                             fontSize = 12.sp,
-                            color = Color.White.copy(alpha = 0.4f),
+                            color = Color.White.copy(alpha = 0.7f),
                         )
                         Text(
                             hand,
@@ -885,19 +887,12 @@ private fun HandRankingList(title: String, values: List<Pair<String, Double>>, b
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White,
                         )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(metricColor(pct, breakEven, sorted))
-                                .padding(horizontal = 10.dp, vertical = 3.dp),
-                        ) {
-                            Text(
-                                "%.1f%%".format(pct),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                            )
-                        }
+                        Text(
+                            "%.1f%%".format(pct),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                        )
                     }
                 }
             }
@@ -907,10 +902,9 @@ private fun HandRankingList(title: String, values: List<Pair<String, Double>>, b
 
 // --- sticky footer tabs ----------------------------------------------------
 
-// A lighter slate panel so the footer reads as a raised bar, clearly distinct
-// from both the near-black screen and the card green. A light hairline tops it
-// off (gold is reserved for the selected tab's indicator).
-private val FooterBackground = Color(0xFF2E5B43)
+// A lighter slate panel so the footer reads as a raised bar, distinct from the
+// screen and cards. A light hairline tops it off (gold marks the active tab).
+private val FooterBackground = Color(0xFF2A3644)
 
 @Composable
 private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {

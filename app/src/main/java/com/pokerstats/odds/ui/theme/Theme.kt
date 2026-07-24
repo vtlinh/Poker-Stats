@@ -16,11 +16,11 @@ import androidx.core.view.WindowCompat
 private val DarkColors = darkColorScheme(
     primary = Gold,
     onPrimary = InkBlack,
-    secondary = FeltGreen,
-    onSecondary = CardWhite,
-    background = TableFelt,
+    secondary = Gold,
+    onSecondary = InkBlack,
+    background = SlateBg,
     onBackground = CardWhite,
-    surface = FeltGreenDark,
+    surface = SlateSurface,
     onSurface = CardWhite,
     error = ChipRed,
 )

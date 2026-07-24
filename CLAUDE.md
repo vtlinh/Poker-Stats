@@ -59,17 +59,20 @@ tools/                                 # C + Python generator for poker_equity.d
     Probability → Pre-flop → Post-flop → Post-turn → Post-river** (later streets
     can dip below earlier ones for drawing hands, since the hero folds the
     boards it misses).
+- The app's chrome is a **neutral dark slate** (theme `SlateBg`/`SlateSurface`,
+  screen gradient + footer in `PokerScreen.kt`) chosen so the red/amber/green
+  probability ramp never collides with the background. The GitHub Pages download
+  page (`docs/index.html`) uses the same slate.
 - The UI has two tabs in a sticky footer: **Hands** (the single-hand
   calculator) and **Table** — a single 13×13 starting-hand grid that fills the
   screen (no scrolling), with a **mode slider** picking the metric: **Default**
   (Win Probability), **Pre-flop**, **Post-flop**, **Turn**, **River**
   (`tableModes()`).
-  Two color modes: **Win Probability** is break-even-anchored (yellow at 1/N,
-  easing `|t|^0.6` on `t = log2(equity/breakEven)` clamped to ±1, green above /
-  red below); the **fold grids** — whose survivors all sit well above break-even
-  — use a red→green ramp keyed on each hand's **rank** among the non-folded values
-  (median = yellow), so color spreads evenly despite clustering. Folded 0% cells
-  are black. The matrix reads every class for the current
+  Every mode uses one **uniform, rank-based** ramp (`metricColor`): red→green
+  keyed on each hand's **rank** among the non-folded values (median = yellow), so
+  color spreads evenly and a hand's color matches between the grid, the ranked
+  list, and the Hands-tab progression. Folded 0% cells are black. The matrix
+  reads every class for the current
   player count via `EquityDatabase.lookupAll(players)`. Section descriptions live
   behind small `(?)` info tooltips (a dismissable `Popup`).
 - `EquityDatabase` copies the asset to the app's databases dir on first use and
